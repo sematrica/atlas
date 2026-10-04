@@ -6,6 +6,26 @@ struct ArticleHeading: Identifiable { let id: String; let title: String; let lev
 @MainActor @Observable
 final class BrowserModel {
     let crawler=CrawlerController()
+    var pendingCitation:RetrievedPassage?
+    var currentArticleID:ArticleID? {
+        guard let record,let url=webView?.url else {return nil}
+        return ArticleID(packageID:record.id,path:String(url.path.dropFirst()))
+    }
+    init() {crawler.intelligence.browser=self}
+    func openCitation(_ passage:RetrievedPassage) {
+        guard record?.id == passage.article.packageID else {message="Open the source Wikipedia package first.";return}
+        pendingCitation=passage;navigate(passage.article.path)
+    }
+    func identifyCitation() {
+        guard let passage=pendingCitation,passage.article == currentArticleID else {return}
+        pendingCitation=nil
+        webView?.callAsyncJavaScript("""
+        const normalize=t=>t.replace(/\\s+/g,' ').trim();
+        const match=[...document.querySelectorAll('p,li,td,dd,figcaption')].find(e=>normalize(e.textContent||'').includes(normalize(needle)));
+        const element=match || document.getElementById(anchor);
+        if(element){element.scrollIntoView({block:'center'});element.style.outline='2px solid #bd9d39';element.style.outlineOffset='4px';}
+        """,arguments:["needle":String(passage.text.prefix(160)),"anchor":passage.anchor ?? ""],in:nil,in:.defaultClient){_ in}
+    }
     var record: PackageRecord?
     var provider: (any ArticleProvider)?
     var webView: WKWebView?
@@ -34,7 +54,7 @@ final class BrowserModel {
         if let url=OfflineURL.make(host:record.package.storageKey,path:main.path) { web.load(URLRequest(url:url)) }
     }
     func close() {
-        crawler.navigationStarted()
+        crawler.stop();crawler.ready=false;pendingCitation=nil
         searchTask?.cancel(); webView?.navigationDelegate=nil; webView?.stopLoading(); webView?.configuration.userContentController.removeAllScriptMessageHandlers()
         webView=nil; provider=nil; record=nil; results=[]; headings=[]; message=nil; query=""; title="Offline Wikipedia"
         canGoBack=false; canGoForward=false; loading=false; searching=false; sessionID=UUID()

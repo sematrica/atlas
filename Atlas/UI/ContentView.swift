@@ -59,6 +59,16 @@ struct ContentView: View {
                     LibraryView(model: library)
                 } else if current == .browse || current == .search || current == .crawl {
                     BrowserView(library: library.packages, browser: library.packages.browser, emphasizeSearch: current == .search, emphasizeCrawl: current == .crawl)
+                } else if current == .ask {
+                    IntelligenceView(ai:library.packages.intelligence,browser:library.packages.browser,
+                        openSource:{passage in library.packages.browser.openCitation(passage);destination = .browse},
+                        explore:{mission in
+                            let crawler=library.packages.browser.crawler
+                            crawler.target=mission
+                            crawler.intelligence.model=library.packages.intelligence.chatModel
+                            destination = .crawl
+                            crawler.start(hunt:false,semantic:true)
+                        })
                 } else {
                     VStack(spacing: 20) {
                         Image(systemName: current.symbol)

@@ -8,7 +8,7 @@ mkdir -p "$smoke_dir/Contents/MacOS"
 swiftc -parse-as-library -target "$(uname -m)-apple-macos14.0" -swift-version 5 \
   -I "$products" -I Native/ZIMBridge/include \
   -Xcc "-fmodule-map-file=$build_dir/Build/Intermediates.noindex/GeneratedModuleMaps/ZIMBridge.modulemap" \
-  Atlas/App/BrowserModel.swift Atlas/Crawler/*.swift Atlas/UI/OfflineWebView.swift Tests/BrowserSmoke/BrowserSmoke.swift \
+  Atlas/App/BrowserModel.swift Atlas/Intelligence/CrawlerIntelligence.swift Atlas/Crawler/*.swift Atlas/UI/OfflineWebView.swift Tests/BrowserSmoke/BrowserSmoke.swift \
   "$products/AtlasCore.o" "$products/ZIMBridge.o" \
   -L Vendor/libzim/lib -lzim -lc++ -Xlinker -rpath -Xlinker "$PWD/Vendor/libzim/lib" \
   -o "$smoke_dir/Contents/MacOS/AtlasBrowserSmoke"

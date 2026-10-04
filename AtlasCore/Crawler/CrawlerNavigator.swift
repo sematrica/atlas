@@ -109,6 +109,14 @@ public struct ProceduralCrawlerAgent: Sendable {
         state=CrawlerState(id:state.id,position:position,mission:mission);state.behavior = .spawning
         state.desired=position; memory=CrawlerMemory(); navigator.reset(); observation=nil;dwell=0.65;decisionIn=0;lastRevision=nil;detour=nil;lastFrontier=position
     }
+    public mutating func steer(to position:DocumentPosition) {
+        detour=position;lastFrontier=navigator.frontier;state.desired=position;state.behavior = .walking;decisionIn=0.45
+    }
+    public mutating func inspect(for seconds:Double) {state.behavior = .inspecting;dwell=seconds;state.velocity = .zero}
+    public mutating func confirmDiscovery(_ quote:String)->Bool {
+        guard let observation,let match=LocalStringMatcher.find(quote,in:observation,excluding:memory.discoveries) else {return false}
+        state.match=match;state.behavior = .targetSuspected;dwell=0.3;return true
+    }
     public mutating func pause() { guard state.behavior != .idle else {return};state.behavior = .paused;state.velocity = .zero }
     public mutating func resume() { guard state.behavior == .paused else {return};state.behavior = .exploring;decisionIn=0 }
     public mutating func stop() { state.behavior = .idle;state.velocity = .zero;state.match=nil;observation=nil }
@@ -151,12 +159,12 @@ public struct ProceduralCrawlerAgent: Sendable {
             state.velocity = .zero
             if dwell<=0 { state.behavior = .approachingTarget };return
         }
+        if state.behavior == .inspecting && dwell>0 {state.velocity = .zero;return}
         if let match=state.match {
             state.desired=match.position
             if state.position.distance(to:match.position)<12 {
                 // Re-confirm using a current local observation, not a previously known global coordinate.
-                if case .stringHunt(let target)=state.mission,
-                   LocalStringMatcher.find(target,in:observation,excluding:memory.discoveries)?.key == match.key {
+                if LocalStringMatcher.find(match.text,in:observation,excluding:memory.discoveries)?.key == match.key {
                     state.behavior = .found;state.velocity = .zero;return
                 }
                 state.match=nil;state.behavior = .exploring

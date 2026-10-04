@@ -5,6 +5,7 @@ import AtlasCore
 
 @MainActor @Observable
 final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler {
+    @ObservationIgnored lazy var intelligence=CrawlerIntelligence(crawler:self)
     var target=""
     var autoFollow=true
     var debug=false
@@ -31,18 +32,18 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
         do {
             _ = try await webView.evaluateJavaScript(DocumentGeometryScript.source,in:nil,contentWorld:.defaultClient)
             guard webView.url == document else {return}
-            ready=true;error=nil
+            ready=true;error=nil;intelligence.arrived()
         } catch {self.error="Document terrain is unavailable. Reload this article."}
     }
-    func navigationStarted() {stop();ready=false}
-    func start(hunt:Bool) {
+    func navigationStarted() {stop(preserveExpedition:intelligence.transitioning);ready=false}
+    func start(hunt:Bool,semantic:Bool=false,preserveExpedition:Bool=false) {
         guard ready,let webView else {return}
         let text=target
-        guard !hunt || !text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else {return}
-        stop();epoch=UUID();let token=epoch
+        guard !(hunt || semantic) || !text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else {return}
+        stop(preserveExpedition:preserveExpedition);epoch=UUID();let token=epoch
         reduceMotion=NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         let p=DocumentPosition(x:max(35,viewport.x+min(140,viewport.width*0.2)),y:viewport.y+90)
-        agent.start(position:p,mission:hunt ? .stringHunt(text) : .freeCrawl);legs.reset(at:p);status=agent.state.behavior
+        agent.start(position:p,mission:semantic ? .semanticHunt(text) : hunt ? .stringHunt(text) : .freeCrawl);legs.reset(at:p);status=agent.state.behavior
         renderer?.startAnimation()
         senses=Task { [weak self,weak webView] in
             while !Task.isCancelled {
@@ -60,7 +61,11 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
                 do {try await Task.sleep(for:.milliseconds(250))}catch{return}
             }
         }
+        if semantic {intelligence.begin(reset:!preserveExpedition)}
     }
+    func inspectFor(_ seconds:Double) {agent.inspect(for:seconds);status=agent.state.behavior}
+    func steer(to position:DocumentPosition) {agent.steer(to:position)}
+    func confirmDiscovery(_ quote:String)->Bool {agent.confirmDiscovery(quote)}
     func refreshPerception() async throws {
         let token=epoch,began=Date()
         let sample=try await observe(around:agent.state.position,radius:radius)
@@ -78,6 +83,7 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
     func tick(dt:Double) {
         guard active,status != .paused else {return}
         agent.advance(dt:dt,reduceMotion:reduceMotion)
+        intelligence.didMove()
         legs.advance(body:agent.state.position,velocity:agent.state.velocity,anchors:anchors,dt:min(dt,0.05),reduceMotion:reduceMotion)
         if status != agent.state.behavior {status=agent.state.behavior}
         if highlighted != nil,agent.state.match == nil {clearHighlight()}
@@ -92,7 +98,9 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
     func resume() {agent.resume();status=agent.state.behavior;renderer?.startAnimation();error=nil}
     func findNext() {clearHighlight();agent.findNext();status=agent.state.behavior}
     func freeAfterFound() {clearHighlight();agent.resumeFreeCrawl();status=agent.state.behavior}
-    func stop() {
+    func stop() {stop(preserveExpedition:false)}
+    func stop(preserveExpedition:Bool) {
+        if !preserveExpedition {intelligence.cancel()}
         epoch=UUID();senses?.cancel();senses=nil;agent.stop();status = .idle;renderer?.stopAnimation();clearHighlight();error=nil
     }
     private func clearHighlight() {
@@ -102,7 +110,7 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
     private func updateInspector() {
         let s=agent.state,observed=agent.observation?.terrain.map(\.text).joined() ?? ""
         let mission:String
-        if case .stringHunt(let target)=s.mission {mission="String Hunt: \(target)"}else{mission="Free Crawl"}
+        switch s.mission {case .stringHunt(let target):mission="String Hunt: \(target)";case .semanticHunt(let target):mission="Semantic Hunt: \(target)";case .freeCrawl:mission="Free Crawl"}
         inspector="State: \(s.behavior.rawValue)\nMission: \(mission)\nPosition: \(Int(s.position.x)), \(Int(s.position.y)) · Radius: \(Int(radius))\nDirection: \(Int(s.velocity.x)), \(Int(s.velocity.y))\nVisited regions: \(agent.memory.visited.count) · Observations: \(agent.memory.observationCount) · Laps: \(agent.navigator.laps)\nPerception: \(Int(perceptionMilliseconds)) ms · \(agent.observation?.terrain.count ?? 0) fragments\nTarget coordinates: \(s.match == nil ? "unknown" : "locally observed")\nObserved text:\n\(observed.prefix(2400))"
     }
     func userContentController(_ userContentController:WKUserContentController,didReceive message:WKScriptMessage) {

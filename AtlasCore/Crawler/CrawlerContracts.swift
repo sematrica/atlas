@@ -53,7 +53,7 @@ public struct CrawlerObservation: Codable, Sendable {
         self.documentWidth=documentWidth;self.documentHeight=documentHeight;self.terrain=terrain;self.truncated=truncated
     }
 }
-public enum CrawlerMission: Equatable, Sendable { case freeCrawl, stringHunt(String) }
+public enum CrawlerMission: Equatable, Sendable { case freeCrawl, stringHunt(String), semanticHunt(String) }
 public enum CrawlerBehavior:String,Sendable {
     case idle, spawning, exploring, walking, inspecting, turning, paused, targetSuspected, approachingTarget, found, stuck, recovering, stopping
 }
