@@ -1,0 +1,114 @@
+import AppKit
+import WebKit
+import Observation
+import AtlasCore
+
+@MainActor @Observable
+final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler {
+    var target=""
+    var autoFollow=true
+    var debug=false
+    var radius=140.0
+    var ready=false
+    var status:CrawlerBehavior = .idle
+    var inspector=""
+    var error:String?
+    @ObservationIgnored private(set) var agent=ProceduralCrawlerAgent()
+    @ObservationIgnored private(set) var legs=CrawlerLegController()
+    @ObservationIgnored private(set) var anchors:[TerrainAnchor]=[]
+    @ObservationIgnored var viewport=TerrainRect(x:0,y:0,width:1,height:1)
+    @ObservationIgnored weak var webView:WKWebView?
+    @ObservationIgnored weak var renderer:CrawlerRenderer?
+    @ObservationIgnored private var senses:Task<Void,Never>?
+    @ObservationIgnored private var epoch=UUID()
+    @ObservationIgnored private var highlighted:String?
+    @ObservationIgnored var reduceMotion=false
+    @ObservationIgnored private(set) var perceptionMilliseconds=0.0
+    var active:Bool {status != .idle}
+    func attach(_ web:WKWebView) {webView=web}
+    func prepare() async {
+        guard let webView else {return};let document=webView.url
+        do {
+            _ = try await webView.evaluateJavaScript(DocumentGeometryScript.source,in:nil,contentWorld:.defaultClient)
+            guard webView.url == document else {return}
+            ready=true;error=nil
+        } catch {self.error="Document terrain is unavailable. Reload this article."}
+    }
+    func navigationStarted() {stop();ready=false}
+    func start(hunt:Bool) {
+        guard ready,let webView else {return}
+        let text=target
+        guard !hunt || !text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else {return}
+        stop();epoch=UUID();let token=epoch
+        reduceMotion=NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let p=DocumentPosition(x:max(35,viewport.x+min(140,viewport.width*0.2)),y:viewport.y+90)
+        agent.start(position:p,mission:hunt ? .stringHunt(text) : .freeCrawl);legs.reset(at:p);status=agent.state.behavior
+        renderer?.startAnimation()
+        senses=Task { [weak self,weak webView] in
+            while !Task.isCancelled {
+                guard let self,let webView,self.epoch == token else {return}
+                do {
+                    try await self.refreshPerception()
+                    guard self.epoch == token,!Task.isCancelled else {return}
+                    if self.autoFollow && ![.paused,.found,.idle].contains(self.status) {
+                        _ = try await webView.callAsyncJavaScript("window.atlasTerrain?.follow(x,y,smooth)",arguments:["x":self.agent.state.position.x,"y":self.agent.state.position.y,"smooth":!self.reduceMotion],in:nil,contentWorld:.defaultClient)
+                    }
+                } catch {
+                    guard self.epoch == token,!Task.isCancelled else {return}
+                    self.agent.pause();self.status = .paused;self.error="Terrain observation stopped. Resume or reload the article."
+                }
+                do {try await Task.sleep(for:.milliseconds(250))}catch{return}
+            }
+        }
+    }
+    func refreshPerception() async throws {
+        let token=epoch,began=Date()
+        let sample=try await observe(around:agent.state.position,radius:radius)
+        guard epoch == token else {return}
+        perceptionMilliseconds=Date().timeIntervalSince(began)*1000
+        viewport=sample.viewport;agent.perceive(sample);anchors=agent.observation?.anchors ?? [];status=agent.state.behavior;updateInspector()
+    }
+    func observe(around position:DocumentPosition,radius:Double) async throws -> CrawlerObservation {
+        guard let webView else {throw AtlasError.articleUnavailable}
+        let value=try await webView.callAsyncJavaScript("return window.atlasTerrain.observe({x:x,y:y},radius)",arguments:["x":position.x,"y":position.y,"radius":radius],in:nil,contentWorld:.defaultClient)
+        let data=try JSONSerialization.data(withJSONObject:value as Any)
+        guard data.count<128*1024 else {throw AtlasError.articleUnavailable}
+        return try JSONDecoder().decode(CrawlerObservation.self,from:data)
+    }
+    func tick(dt:Double) {
+        guard active,status != .paused else {return}
+        agent.advance(dt:dt,reduceMotion:reduceMotion)
+        legs.advance(body:agent.state.position,velocity:agent.state.velocity,anchors:anchors,dt:min(dt,0.05),reduceMotion:reduceMotion)
+        if status != agent.state.behavior {status=agent.state.behavior}
+        if highlighted != nil,agent.state.match == nil {clearHighlight()}
+        if status == .found,let match=agent.state.match,highlighted != match.key {
+            highlighted=match.key
+            webView?.callAsyncJavaScript("return window.atlasTerrain.highlight(ids,firstOffset,lastOffset)",arguments:["ids":match.terrainIDs,"firstOffset":match.firstOffset,"lastOffset":match.lastOffset],in:nil,in:.defaultClient) { [weak self] result in
+                if case .failure = result {self?.error="Found the phrase, but its highlight could not be applied."}
+            }
+        }
+    }
+    func pause() {agent.pause();status=agent.state.behavior;renderer?.stopAnimation();updateInspector()}
+    func resume() {agent.resume();status=agent.state.behavior;renderer?.startAnimation();error=nil}
+    func findNext() {clearHighlight();agent.findNext();status=agent.state.behavior}
+    func freeAfterFound() {clearHighlight();agent.resumeFreeCrawl();status=agent.state.behavior}
+    func stop() {
+        epoch=UUID();senses?.cancel();senses=nil;agent.stop();status = .idle;renderer?.stopAnimation();clearHighlight();error=nil
+    }
+    private func clearHighlight() {
+        highlighted=nil
+        webView?.evaluateJavaScript("window.atlasTerrain?.clear()",in:nil,in:.defaultClient){_ in}
+    }
+    private func updateInspector() {
+        let s=agent.state,observed=agent.observation?.terrain.map(\.text).joined() ?? ""
+        let mission:String
+        if case .stringHunt(let target)=s.mission {mission="String Hunt: \(target)"}else{mission="Free Crawl"}
+        inspector="State: \(s.behavior.rawValue)\nMission: \(mission)\nPosition: \(Int(s.position.x)), \(Int(s.position.y)) · Radius: \(Int(radius))\nDirection: \(Int(s.velocity.x)), \(Int(s.velocity.y))\nVisited regions: \(agent.memory.visited.count) · Observations: \(agent.memory.observationCount) · Laps: \(agent.navigator.laps)\nPerception: \(Int(perceptionMilliseconds)) ms · \(agent.observation?.terrain.count ?? 0) fragments\nTarget coordinates: \(s.match == nil ? "unknown" : "locally observed")\nObserved text:\n\(observed.prefix(2400))"
+    }
+    func userContentController(_ userContentController:WKUserContentController,didReceive message:WKScriptMessage) {
+        guard message.frameInfo.isMainFrame,message.frameInfo.request.url?.host == webView?.url?.host,
+              let body=message.body as? [String:Any],let raw=body["viewport"],
+              let data=try? JSONSerialization.data(withJSONObject:raw),let rect=try? JSONDecoder().decode(TerrainRect.self,from:data) else {return}
+        viewport=rect;renderer?.needsDisplay=true
+    }
+}
