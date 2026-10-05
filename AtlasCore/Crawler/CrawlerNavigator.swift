@@ -101,13 +101,14 @@ public struct ProceduralCrawlerAgent: Sendable {
     public private(set) var navigator:CrawlerNavigator
     private var decisionIn=0.0
     private var dwell=0.0
+    private var burstRemaining=1.1
     private var lastRevision:Int?
     private var lastFrontier=DocumentPosition.zero
     private var detour:DocumentPosition?
     public init(id:UUID=UUID(),seed:UInt64=42) { state=CrawlerState(id:id);navigator=CrawlerNavigator(seed:seed) }
     public mutating func start(position:DocumentPosition,mission:CrawlerMission) {
         state=CrawlerState(id:state.id,position:position,mission:mission);state.behavior = .spawning
-        state.desired=position; memory=CrawlerMemory(); navigator.reset(); observation=nil;dwell=0.65;decisionIn=0;lastRevision=nil;detour=nil;lastFrontier=position
+        state.desired=position; memory=CrawlerMemory(); navigator.reset(); observation=nil;dwell=0.65;decisionIn=0;lastRevision=nil;detour=nil;lastFrontier=position;burstRemaining=1.1
     }
     public mutating func steer(to position:DocumentPosition) {
         detour=position;lastFrontier=navigator.frontier;state.desired=position;state.behavior = .walking;decisionIn=0.45
@@ -147,7 +148,7 @@ public struct ProceduralCrawlerAgent: Sendable {
             if state.match?.key != match.key { state.match=match;state.behavior = .targetSuspected;dwell=0.3 }
         }
     }
-    public mutating func advance(dt raw:Double,speed:Double=48,reduceMotion:Bool=false) {
+    public mutating func advance(dt raw:Double,speed:Double=128,reduceMotion:Bool=false) {
         let dt=min(max(raw,0),0.05)
         guard ![.idle,.paused,.found].contains(state.behavior) else {return}
         state.elapsed += dt;decisionIn -= dt;dwell -= dt
@@ -160,6 +161,15 @@ public struct ProceduralCrawlerAgent: Sendable {
             if dwell<=0 { state.behavior = .approachingTarget };return
         }
         if state.behavior == .inspecting && dwell>0 {state.velocity = .zero;return}
+        // Bounded bursts give the insect a quick scan-and-scuttle rhythm without changing coverage.
+        if !reduceMotion,state.match == nil {
+            burstRemaining -= dt
+            if burstRemaining<=0 {
+                burstRemaining=0.75+navigator.random()*0.7
+                state.behavior = .inspecting;dwell=0.16+navigator.random()*0.22
+                state.velocity = .zero;return
+            }
+        }
         if let match=state.match {
             state.desired=match.position
             if state.position.distance(to:match.position)<12 {
@@ -180,9 +190,9 @@ public struct ProceduralCrawlerAgent: Sendable {
                 }
             }
             state.desired=detour ?? frontier
-            decisionIn=0.45
-            if case .freeCrawl=state.mission, navigator.random()<0.08 {
-                state.behavior = .inspecting;dwell=0.5+navigator.random()*0.5
+            decisionIn=0.22
+            if case .freeCrawl=state.mission, navigator.random()<0.04 {
+                state.behavior = .inspecting;dwell=0.25+navigator.random()*0.25
             } else { state.behavior = (state.desired.x-state.position.x)*state.velocity.x+(state.desired.y-state.position.y)*state.velocity.y < 0 ? .turning : .walking }
         }
         if state.behavior == .inspecting && dwell>0 { state.velocity = .zero;return }
@@ -190,10 +200,10 @@ public struct ProceduralCrawlerAgent: Sendable {
         guard distance>0.5 else {state.velocity = .zero;return}
         // Don't outrun the last perception disk; waiting allows the slower senses loop to catch up.
         if state.position.distance(to:observation.center)>observation.radius*0.5 {state.velocity = .zero;return}
-        let organic=reduceMotion ? 1 : 0.92+0.08*sin(state.elapsed*2.3)
-        let magnitude=min(speed*organic,distance*3)
+        let organic=reduceMotion ? 0.65 : 0.93+0.07*sin(state.elapsed*9)
+        let magnitude=min(speed*organic,distance*5)
         let vx=(state.desired.x-state.position.x)/distance*magnitude,vy=(state.desired.y-state.position.y)/distance*magnitude
-        let smooth=min(1,dt*7)
+        let smooth=min(1,dt*(reduceMotion ? 7 : 16))
         state.velocity.x += (vx-state.velocity.x)*smooth;state.velocity.y += (vy-state.velocity.y)*smooth
         state.position=state.position.moved(state.velocity.x*dt,state.velocity.y*dt)
     }

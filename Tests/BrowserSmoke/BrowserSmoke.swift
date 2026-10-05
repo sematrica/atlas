@@ -148,7 +148,14 @@ struct BrowserSmoke {
         crawler.stop()
         // Capture the actual native renderer layered over WebKit for visual inspection.
         _ = try await js(web,"scrollTo(0,0)");try await Task.sleep(for:.milliseconds(200))
-        crawler.start(hunt:false);try await Task.sleep(for:.seconds(2));crawler.pause()
+        crawler.start(hunt:false);try await Task.sleep(for:.seconds(2))
+        // Capture the full long-legged silhouette after it has left the document edge.
+        for _ in 0..<220 {
+            let point=crawler.agent.state.position
+            if point.x>100 && point.x<800 && point.y>100 && point.y<550 {break}
+            try await crawler.refreshPerception();for _ in 0..<12 {crawler.tick(dt:0.05)}
+        }
+        crawler.pause();try await Task.sleep(for:.milliseconds(100))
         let page=try await web.takeSnapshot(configuration:nil)
         guard let overlay=surface.overlay.bitmapImageRepForCachingDisplay(in:surface.overlay.bounds) else {throw Failure.check("No overlay bitmap")}
         surface.overlay.cacheDisplay(in:surface.overlay.bounds,to:overlay)

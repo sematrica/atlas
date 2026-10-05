@@ -2,6 +2,20 @@ import XCTest
 @testable import AtlasCore
 
 final class CrawlerTests:XCTestCase {
+    func testScuttlingHasFastBurstsAndBriefStationaryInspections() {
+        var agent=ProceduralCrawlerAgent()
+        agent.start(position:.init(x:100,y:100),mission:.freeCrawl)
+        var peak=0.0,stops=0
+        for _ in 0..<600 {
+            agent.perceive(sample([],center:agent.state.position))
+            agent.advance(dt:1.0/60)
+            peak=max(peak,hypot(agent.state.velocity.x,agent.state.velocity.y))
+            if agent.state.elapsed>1,agent.state.behavior == .inspecting,agent.state.velocity == .zero {stops += 1}
+        }
+        XCTAssertGreaterThan(peak,90)
+        XCTAssertGreaterThan(stops,5)
+        XCTAssertLessThan(stops,300,"Brief rests must not dominate exploration")
+    }
     func terrain(_ text:String,x:Double=90,y:Double=90,id:String="a",order:Int=0)->CrawlerTerrain {
         .init(id:id,group:"paragraph",order:order,kind:.text,rect:.init(x:x,y:y,width:40,height:16),text:text)
     }

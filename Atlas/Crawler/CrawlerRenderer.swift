@@ -48,11 +48,11 @@ final class CrawlerRenderer:NSView {
         }
         let spawn=min(1,state.elapsed/0.65)
         context.setAlpha(spawn)
-        let color=state.behavior == .found ? NSColor(calibratedRed:0.12,green:0.50,blue:0.38,alpha:1) : NSColor(calibratedWhite:0.18,alpha:1)
+        let color=state.behavior == .found ? NSColor(calibratedRed:0.12,green:0.50,blue:0.38,alpha:1) : NSColor(calibratedRed:0.12,green:0.16,blue:0.18,alpha:1)
         // A pale narrow halo keeps the creature legible over images and dark article regions.
         for halo in [true,false] {
             context.setStrokeColor((halo ? NSColor.white.withAlphaComponent(0.8) : color).cgColor)
-            context.setLineWidth(halo ? 3.2 : 1.25);context.setLineCap(.round);context.setLineJoin(.round)
+            context.setLineWidth(halo ? 3.3 : 1.65);context.setLineCap(.round);context.setLineJoin(.miter)
             for i in crawler.legs.legs.indices {
                 let a=crawler.legs.attachment(i,body:p),k=crawler.legs.knee(i,body:p),foot=crawler.legs.legs[i].foot
                 context.move(to:CGPoint(x:a.x,y:a.y))
@@ -63,11 +63,30 @@ final class CrawlerRenderer:NSView {
                 }
             }
         }
+        // Exposed pivot bearings and short actuator rods make each limb read as a mechanism.
+        let accent=state.behavior == .found ? NSColor.systemGreen : NSColor(calibratedRed:0.25,green:0.86,blue:0.79,alpha:1)
+        for i in crawler.legs.legs.indices {
+            let a=crawler.legs.attachment(i,body:p),raw=crawler.legs.knee(i,body:p)
+            let k=DocumentPosition(x:p.x+(raw.x-p.x)*spawn,y:p.y+(raw.y-p.y)*spawn)
+            context.setStrokeColor(NSColor(calibratedWhite:0.65,alpha:1).cgColor);context.setLineWidth(0.7)
+            context.move(to:CGPoint(x:a.x,y:a.y));context.addLine(to:CGPoint(x:a.x+(k.x-a.x)*0.65,y:a.y+(k.y-a.y)*0.65));context.strokePath()
+            context.setFillColor(color.cgColor);context.setStrokeColor(NSColor(calibratedWhite:0.85,alpha:1).cgColor)
+            context.fillEllipse(in:CGRect(x:k.x-2,y:k.y-2,width:4,height:4))
+            context.strokeEllipse(in:CGRect(x:k.x-2,y:k.y-2,width:4,height:4))
+        }
         context.translateBy(x:p.x,y:p.y);context.rotate(by:crawler.legs.heading)
-        let breathing=crawler.reduceMotion ? 0 : sin(state.elapsed*3)*0.35
-        context.setFillColor(color.cgColor);context.setStrokeColor(NSColor.white.withAlphaComponent(0.8).cgColor);context.setLineWidth(0.8)
-        context.addEllipse(in:CGRect(x:-9,y:-5-breathing,width:15,height:10+breathing*2));context.drawPath(using:.fillStroke)
-        context.addEllipse(in:CGRect(x:3,y:-3.5,width:7,height:7));context.drawPath(using:.fillStroke)
+        // Faceted chassis, inset processor plate, and twin optical sensors. No idle bobbing.
+        context.setFillColor(color.cgColor);context.setStrokeColor(NSColor(calibratedWhite:0.85,alpha:1).cgColor);context.setLineWidth(0.9)
+        context.move(to:CGPoint(x:-12,y:-3));context.addLine(to:CGPoint(x:-7,y:-7))
+        context.addLine(to:CGPoint(x:5,y:-6));context.addLine(to:CGPoint(x:11,y:-3))
+        context.addLine(to:CGPoint(x:11,y:3));context.addLine(to:CGPoint(x:5,y:6))
+        context.addLine(to:CGPoint(x:-7,y:7));context.addLine(to:CGPoint(x:-12,y:3));context.closePath();context.drawPath(using:.fillStroke)
+        context.setStrokeColor(accent.withAlphaComponent(0.8).cgColor);context.setLineWidth(0.65)
+        context.stroke(CGRect(x:-6,y:-3,width:9,height:6))
+        context.move(to:CGPoint(x:-10,y:0));context.addLine(to:CGPoint(x:-6,y:0));context.strokePath()
+        context.setFillColor(accent.cgColor)
+        for y in [-2.5,2.5] {context.fillEllipse(in:CGRect(x:6,y:y-1,width:2.5,height:2))}
+
     }
 }
 
