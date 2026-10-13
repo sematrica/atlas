@@ -86,7 +86,7 @@ final class OfflineBrowserDelegate: NSObject, WKNavigationDelegate, WKScriptMess
         }
         decisionHandler(.cancel)
         if let path=OfflineURL.localWikipediaPath(url) { model?.navigate(path) }
-        else { model?.message="External link blocked. Reading in Atlas stays offline." }
+        else { model?.message="External link blocked. Reading in Sematrica stays offline." }
     }
     func webView(_ webView: WKWebView,didStartProvisionalNavigation navigation: WKNavigation!) {
         model?.crawler.navigationStarted()

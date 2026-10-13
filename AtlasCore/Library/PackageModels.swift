@@ -8,7 +8,7 @@ public enum AtlasError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .storageUnavailable: "Reconnect your library drive or choose its folder again."
-        case .invalidPath: "This library contains an unsafe file location. Choose a dedicated Atlas folder."
+        case .invalidPath: "This library contains an unsafe file location. Choose a dedicated Sematrica folder."
         case .catalogUnavailable: "The package catalog is unavailable. Check your connection and try again."
         case .insufficientSpace: "There isn’t enough free space on the library drive for this package."
         case .invalidResponse: "The download server returned an unexpected response. Try again later."
@@ -17,7 +17,7 @@ public enum AtlasError: LocalizedError {
         case .incompleteDownload: "The download was interrupted. Resume to continue from the saved partial file."
         case .articleUnavailable: "This article or resource isn’t included in the installed package."
         case .searchUnavailable: "The archive’s search index could not be opened. Try verifying the package."
-        case .unsupportedArchive: "This dataset is archive-only and cannot be browsed in Atlas."
+        case .unsupportedArchive: "This dataset is archive-only and cannot be browsed in Sematrica."
         case .busy: "Wait for the current package operation to finish."
         case .invalidManifest: "The package manifest could not be read. Existing files have been preserved."
         }
@@ -32,7 +32,7 @@ public enum AtlasLog {
         let cocoa = error as NSError
         if cocoa.domain == NSCocoaErrorDomain && cocoa.code == NSFileWriteOutOfSpaceError { return AtlasError.insufficientSpace.localizedDescription }
         if cocoa.domain == NSURLErrorDomain { return "The connection was interrupted. Check your network and resume the download." }
-        return "Atlas couldn’t access the library files. Reconnect the drive, check its permissions, and try again."
+        return "Sematrica couldn’t access the library files. Reconnect the drive, check its permissions, and try again."
     }
 }
 public enum PackageFormat: String, Codable, Sendable { case zim, archive }

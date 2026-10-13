@@ -45,7 +45,7 @@ struct ContentView: View {
                 Label(item.rawValue, systemImage: item.symbol).tag(item)
                     .padding(.vertical, 5)
             }
-            .navigationTitle("Atlas")
+            .navigationTitle("Sematrica")
             .navigationSplitViewColumnWidth(min: 170, ideal: 200, max: 240)
             .safeAreaInset(edge: .bottom) {
                 VStack(alignment: .leading, spacing: 5) {

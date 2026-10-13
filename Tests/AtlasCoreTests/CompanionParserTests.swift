@@ -29,6 +29,9 @@ final class CompanionParserTests:XCTestCase {
 
         let f=step("highlight the verbs half green half yellow")
         XCTAssertEqual(f?.query?.partOfSpeech,"verb");XCTAssertEqual(HighlightStyle.parse(f?.color)?.mode,.split)
+
+        // Addressing the companion by name doesn't stop local understanding.
+        XCTAssertEqual(step("hey Sematrica, how many links in this article")?.query?.unit,"link")
     }
 
     func testCountingVariants() {

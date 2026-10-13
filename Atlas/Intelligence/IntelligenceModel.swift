@@ -101,7 +101,7 @@ final class IntelligenceModel {
         if let data=try? JSONEncoder().encode(report) {UserDefaults.standard.set(data,forKey:"atlas.fit."+report.model)}
     }
     func testModel() async {
-        do {let text=try await provider.generate(model:chatModel,prompt:"Reply with: Atlas is ready.");message=String(text.prefix(200))}
+        do {let text=try await provider.generate(model:chatModel,prompt:"Reply with: Sematrica is ready.");message=String(text.prefix(200))}
         catch {message=error.localizedDescription}
     }
     func reset() {

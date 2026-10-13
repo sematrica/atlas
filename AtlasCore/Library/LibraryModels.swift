@@ -30,9 +30,9 @@ public enum StorageError: LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .notDirectory: return "Choose an existing folder for your Atlas library."
+        case .notDirectory: return "Choose an existing folder for your Sematrica library."
         case .unsafeLayout(let name): return "The library item ‘\(name)’ must be a real folder, not a file or symbolic link."
-        case .unsupportedSchema(let version): return "This library uses schema \(version), which this version of Atlas cannot open."
+        case .unsupportedSchema(let version): return "This library uses schema \(version), which this version of Sematrica cannot open."
         case .identityMismatch: return "A different library is present at this location. Choose the intended library again."
         case .incompleteLibrary(let name): return "The library is missing ‘\(name)’. Choose this folder again to repair its structure."
         }

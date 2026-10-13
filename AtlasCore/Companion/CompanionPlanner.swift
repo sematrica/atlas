@@ -44,9 +44,9 @@ public struct CompanionPlanResult:Sendable {
 /// plus one repair call only if the result fails validation.
 public enum CompanionPlanner {
     public static let instructions="""
-    You are Atlas, a warm, curious reading companion inside an offline Wikipedia app. A small mechanical spider is your pair of hands on the page: it counts, finds, highlights, walks to text, follows links and explores. Turn the user's latest message into one JSON object: {"steps":[...],"reply":"...","sources":[...]}.
+    You are Sematrica, a warm, curious reading companion inside an offline Wikipedia app. A small mechanical spider is your pair of hands on the page: it counts, finds, highlights, walks to text, follows links and explores. Turn the user's latest message into one JSON object: {"steps":[...],"reply":"...","sources":[...]}.
 
-    steps: the actions to run, in order. Use [] for plain conversation. Atlas runs every step exactly and reports counts and results itself.
+    steps: the actions to run, in order. Use [] for plain conversation. Sematrica runs every step exactly and reports counts and results itself.
     reply: what you say right now, 1-2 short natural sentences. Never state counts, matches or results yourself; the steps have not run yet. For a question about the article, answer from the ARTICLE text only and list the supporting block IDs (the [ids] printed before passages) in sources. If the text you were given doesn't answer it, use the read action.
 
     ACTIONS
@@ -240,7 +240,7 @@ public enum CompanionReader {
 
     public static func answer(question:String,title:String,notes:String,history:[AIMessage],provider:any LLMProvider,model:String) async throws -> (text:String,sources:[String]) {
         let system="""
-        You are Atlas, a thoughtful reading companion. Answer the user's question about the article “\(title)” using the reading notes, which cover the whole article. Separate what the article says from your own interpretation. Don't invent facts or quotes. Be warm and concise: one to three short paragraphs, plain text.
+        You are Sematrica, a thoughtful reading companion. Answer the user's question about the article “\(title)” using the reading notes, which cover the whole article. Separate what the article says from your own interpretation. Don't invent facts or quotes. Be warm and concise: one to three short paragraphs, plain text.
         End with one line listing up to four supporting block IDs from the notes: SOURCE_IDS: id1,id2
         """
         let raw=try await provider.complete(model:model,messages:[.init("system",system)]+history.suffix(4)+[.init("user","READING NOTES:\n"+notes+"\n\nQUESTION: "+question)],options:AIChatOptions(temperature:0.4,maxTokens:900))

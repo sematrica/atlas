@@ -18,7 +18,7 @@ struct LibraryView: View {
                     storageCard {
                         Label("Start with a storage location", systemImage: "externaldrive.badge.plus")
                             .font(.title3.weight(.semibold))
-                        Text("Choose or create a dedicated Atlas folder. An external SSD gives your future encyclopedia room to grow.")
+                        Text("Choose or create a dedicated Sematrica folder. An external SSD gives your future encyclopedia room to grow.")
                             .foregroundStyle(.secondary)
                         chooseButton
                     }

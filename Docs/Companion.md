@@ -1,6 +1,6 @@
 # The reading companion
 
-Open an article and type into the panel beside it. Atlas answers questions about the article and carries out tasks on the page. The spider is its pair of hands: it walks to text, highlights it, follows links and explores.
+Open an article and type into the panel beside it. Sematrica answers questions about the article and carries out tasks on the page. The spider is its pair of hands: it walks to text, highlights it, follows links and explores.
 
 ## What you can ask
 
@@ -35,13 +35,13 @@ Anything that combines a **target**, **conditions** and an **action**:
 ## How it works
 
 1. **Instant local understanding.** `CompanionLocalParser` handles common phrasing such as counts, find and highlight with conditions and colors, go to, and controls. It accepts a request only if it understands every word; otherwise the request goes to the model. These requests need no model and answer immediately ("understood instantly" appears under the reply).
-2. **One model call.** Everything else becomes a single Ollama call whose output is constrained by a JSON schema (`CompanionPlan.schema`), so even small local models can only return a well-formed plan: a short reply plus a list of steps. If a plan fails validation, Atlas asks once more with the reason; steps that still fail are reported, never guessed.
+2. **One model call.** Everything else becomes a single Ollama call whose output is constrained by a JSON schema (`CompanionPlan.schema`), so even small local models can only return a well-formed plan: a short reply plus a list of steps. If a plan fails validation, Sematrica asks once more with the reason; steps that still fail are reported, never guessed.
 3. **Deterministic execution.** `PageQueryEngine` runs every count, list and selection over the complete page map, so totals never come from the model's arithmetic. The model only translates the request.
 4. **The spider performs.** With 15 or fewer matches the spider walks to each one and marks it. With more, it sweeps down the page and lights matches up as it passes; *Finish now* paints the rest at once. "Go to" requests walk to the target and spotlight it.
 
 Highlights are colored **layers** that stay until cleared. Colors come from the user's own words: any CSS color name or hex value, plus everyday names (mint, peach, rose…), light and dark shades, *half … half* (split each match), *alternating* (match by match), *gradient from … to …*, *rainbow*, *half of them … the rest …* (groups), *underline*, and *text* (color the letters). The legend under the conversation lists each layer with a button to remove it.
 
-Layers are live DOM ranges, so they survive window resizes and images loading. If the article's text itself changes, Atlas asks you to repeat the request instead of painting stale positions.
+Layers are live DOM ranges, so they survive window resizes and images loading. If the article's text itself changes, Sematrica asks you to repeat the request instead of painting stale positions.
 
 Saved results (`r1`, `r2`…) let follow-ups refer back: "show them again", "highlight those in red", "yes" after "Want me to highlight them?".
 
@@ -54,7 +54,7 @@ The companion works with any chat model installed in Ollama (0.5 or newer for sc
 
 Common requests run locally regardless of the model, so even a weak model handles them well.
 
-For speed, Atlas uses one context size for every request (changing it makes Ollama reload the model), keeps the model loaded for 30 minutes between messages, checks the model's safety once rather than on every call, and places the article opening before the conversation so Ollama can reuse its cache.
+For speed, Sematrica uses one context size for every request (changing it makes Ollama reload the model), keeps the model loaded for 30 minutes between messages, checks the model's safety once rather than on every call, and places the article opening before the conversation so Ollama can reuse its cache.
 
 ## Limits
 

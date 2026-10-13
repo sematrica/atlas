@@ -88,7 +88,7 @@ public enum CompanionLocalParser {
         var changed=true
         while changed && !cursor.done {
             changed=false
-            if cursor.accept([",","please","pls","plz","kindly","hey","hi","ok","okay","so","now","atlas","spider","alright","then","just","also"]) != nil {changed=true;continue}
+            if cursor.accept([",","please","pls","plz","kindly","hey","hi","ok","okay","so","now","sematrica","atlas","spider","alright","then","just","also"]) != nil {changed=true;continue}
             for phrase in [["can","you"],["could","you"],["would","you"],["will","you"],["can","u"],["i","want","you","to"],["i","need","you","to"],["id","like","you","to"],["i","would","like","you","to"],["lets"],["let","us"],["i","want","to","see"],["i","want"]] where cursor.accept(sequence:phrase) {
                 changed=true;break
             }

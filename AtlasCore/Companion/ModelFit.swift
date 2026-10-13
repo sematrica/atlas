@@ -56,14 +56,14 @@ public enum ModelFit {
         var rating:FitRating
         if let parameters=profile.parameters {
             let size=parameters>=1 ? String(format:"%.1fB",parameters) : String(format:"%.0fM",parameters*1000)
-            if parameters>=14 {rating = .strong;reasons.append("\(size) parameters: large enough to follow Atlas's instructions closely")}
+            if parameters>=14 {rating = .strong;reasons.append("\(size) parameters: large enough to follow Sematrica's instructions closely")}
             else if parameters>=7 {rating = .medium;reasons.append("\(size) parameters: follows most instructions; rare phrasing may need a retry")}
             else {rating = .weak;reasons.append("\(size) parameters: small models often misread multi-part requests")}
         } else {
             rating = .unknown;reasons.append("Size not reported; run the fit test")
         }
         if let context=profile.contextLength {
-            if context<8192 {rating=rating.lowered();reasons.append("\(context)-token context window is shorter than Atlas uses (8,192)")}
+            if context<8192 {rating=rating.lowered();reasons.append("\(context)-token context window is shorter than Sematrica uses (8,192)")}
             else {reasons.append("\(context/1024)K-token context window")}
         }
         if let quantization=profile.quantization {
@@ -95,7 +95,7 @@ public enum ModelFit {
         sections:["introduction","Early life","Career","Legacy"],
         stats:"42 text blocks, 310 links, 6 images",
         opening:"[b1] § introduction\nRay Charles Robinson (September 23, 1930 – June 10, 2004) was an American singer, songwriter and pianist. He was often called “The Genius”.\n\n[b2] § introduction\nCharles was blind from the age of seven. He pioneered soul music during the 1950s by combining blues, jazz, rhythm and blues, and gospel styles.",
-        coverage:"Selected excerpts; Atlas's page tools still inspect the whole page.",
+        coverage:"Selected excerpts; Sematrica's page tools still inspect the whole page.",
         state:"idle; speed normal; links allowed")
 
     static func lower(_ value:String?)->String {(value ?? "").lowercased()}

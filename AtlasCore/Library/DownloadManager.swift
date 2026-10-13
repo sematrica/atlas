@@ -18,7 +18,7 @@ public actor DownloadManager {
         var next: [String:PackageRecord]=[:]
         for var record in stored {
             if record.state == .downloading || record.state == .verifying {
-                record.state = .paused; record.message="Interrupted when Atlas closed. Resume to continue or finish verification."
+                record.state = .paused; record.message="Interrupted when Sematrica closed. Resume to continue or finish verification."
                 try PackageManifest(access:newAccess).save(record)
             }
             if record.state == .installed {

@@ -23,7 +23,7 @@ public struct CompanionContext:Sendable {
     }
     static func note(included:Int,total:Int,complete:Bool,truncated:Bool)->String {
         if complete {return "The full rendered article text is present (\(total) text blocks)."}
-        let suffix=truncated ? " The page map reached its extraction limit, so even local whole-page counts may be incomplete." : " Atlas's page tools still inspect the whole page; use the read action to read everything."
+        let suffix=truncated ? " The page map reached its extraction limit, so even local whole-page counts may be incomplete." : " Sematrica's page tools still inspect the whole page; use the read action to read everything."
         return "Selected excerpts from \(included) of \(total) text blocks; this is not the full article.\(suffix)"
     }
 
