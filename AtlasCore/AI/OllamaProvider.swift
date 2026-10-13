@@ -114,17 +114,18 @@ public final class OllamaProvider: NSObject, LLMProvider, EmbeddingProvider, URL
         AsyncThrowingStream { continuation in
             let task=Task {
                 do {
-                    _ = try await self.validatedModel(model)
+                    let checked=try await self.validatedModel(model)
+                    let thinking=checked.capabilities.contains("thinking")
                     var effective=format
                     let noSchema=self.locked {self.schemaUnsupported}
                     if case .schema=effective,noSchema {effective = .json}
                     do {
-                        try await self.stream(model:model,messages:messages,format:effective,options:options,continuation:continuation)
+                        try await self.stream(model:model,messages:messages,format:effective,options:options,thinking:thinking,continuation:continuation)
                     } catch OllamaStreamError.formatRejected(let detail) {
                         // Ollama before 0.5 accepts only "json". Remember and retry without the schema.
                         guard case .schema=effective else {throw AIError.message("Ollama: "+detail)}
                         self.locked {self.schemaUnsupported=true}
-                        try await self.stream(model:model,messages:messages,format:.json,options:options,continuation:continuation)
+                        try await self.stream(model:model,messages:messages,format:.json,options:options,thinking:thinking,continuation:continuation)
                     }
                     continuation.finish()
                 } catch {continuation.finish(throwing:error)}
@@ -135,14 +136,18 @@ public final class OllamaProvider: NSObject, LLMProvider, EmbeddingProvider, URL
 
     private enum OllamaStreamError:Error {case formatRejected(String)}
 
-    private func stream(model:String,messages:[AIMessage],format:AIResponseFormat,options:AIChatOptions,continuation:AsyncThrowingStream<String,Error>.Continuation) async throws {
-        let body:[String:Any]=[
+    /// - Parameter thinking: the model reasons before answering by default (Qwen3, gpt-oss…).
+    ///   Atlas asks for the answer directly: thinking adds seconds to every message.
+    private func stream(model:String,messages:[AIMessage],format:AIResponseFormat,options:AIChatOptions,thinking:Bool,continuation:AsyncThrowingStream<String,Error>.Continuation) async throws {
+        var body:[String:Any]=[
             "model":model,
             "messages":messages.map {["role":$0.role,"content":$0.content]},
             "stream":true,
             "keep_alive":Self.keepAlive,
             "options":["temperature":options.temperature,"num_ctx":Self.contextTokens,"num_predict":options.maxTokens]
         ]
+        // gpt-oss can't switch reasoning off, only down to "low".
+        if thinking {body["think"]=model.lowercased().contains("gpt-oss") ? "low" : false}
         var raw:[(String,String)]=[]
         switch format {
         case .text: break
