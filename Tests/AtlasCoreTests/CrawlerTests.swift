@@ -12,7 +12,7 @@ final class CrawlerTests:XCTestCase {
             peak=max(peak,hypot(agent.state.velocity.x,agent.state.velocity.y))
             if agent.state.elapsed>1,agent.state.behavior == .inspecting,agent.state.velocity == .zero {stops += 1}
         }
-        XCTAssertGreaterThan(peak,90)
+        XCTAssertGreaterThan(peak,200)
         XCTAssertGreaterThan(stops,5)
         XCTAssertLessThan(stops,300,"Brief rests must not dominate exploration")
     }
@@ -42,6 +42,12 @@ final class CrawlerTests:XCTestCase {
         XCTAssertNotEqual(first.key,next.key)
         XCTAssertNil(LocalStringMatcher.find("apollo 11",in:observation,excluding:[]))
     }
+    func testApproachCentersTheEntireObservedPhrase() {
+        let observation=sample([terrain("Apollo ",x:20,id:"a",order:0),terrain("11",x:180,id:"b",order:7)],center:.init(x:120,y:100))
+        let match=LocalStringMatcher.find("Apollo 11",in:observation,excluding:[])!
+        XCTAssertEqual(match.position.x,120)
+        XCTAssertTrue(match.rects.allSatisfy {$0.center.distance(to:match.position)<observation.radius})
+    }
     func testGapInPerceivedTextCannotFabricateMatch() {
         let observation=sample([terrain("Apollo ",id:"a",order:0),terrain("11",id:"b",order:4)])
         XCTAssertNil(LocalStringMatcher.find("Apollo 11",in:observation,excluding:[]))
@@ -69,8 +75,93 @@ final class CrawlerTests:XCTestCase {
         var gait=CrawlerLegController();gait.reset(at:.init(x:100,y:100))
         let before=gait.legs.map(\.foot)
         gait.advance(body:.init(x:118,y:100),velocity:.init(x:40,y:0),anchors:[],dt:0.016,reduceMotion:false)
-        XCTAssertEqual(gait.legs.filter(\.isStepping).count,4)
+        XCTAssertGreaterThan(gait.legs.filter(\.isStepping).count,0)
+        XCTAssertLessThanOrEqual(gait.legs.filter(\.isStepping).count,2)
         for i in 0..<8 where !gait.legs[i].isStepping {XCTAssertEqual(gait.legs[i].foot,before[i])}
+    }
+    func testFastGaitOverlapsDiagonalStepsWithoutSlidingSupportFeet() {
+        var gait=CrawlerLegController();gait.reset(at:.init(x:100,y:100))
+        var sawOverlappingPairs=false
+        for frame in 0..<50 {
+            let oldFeet=gait.legs.map(\.foot),oldStepping=gait.legs.map(\.isStepping)
+            let body=DocumentPosition(x:118+Double(frame)*4,y:100)
+            gait.advance(body:body,velocity:.init(x:240,y:0),anchors:[],dt:1.0/60,reduceMotion:false)
+            let active=gait.legs.filter(\.isStepping).count
+            XCTAssertLessThanOrEqual(active,4)
+            if active==4 {sawOverlappingPairs=true}
+            for i in 0..<8 {
+                if !oldStepping[i] && !gait.legs[i].isStepping {
+                    XCTAssertEqual(gait.legs[i].foot,oldFeet[i],"A planted foot must not slide")
+                }
+                XCTAssertLessThan(gait.legs[i].foot.distance(to:oldFeet[i]),35,"A foot should swing smoothly between frames")
+            }
+        }
+        XCTAssertTrue(sawOverlappingPairs)
+    }
+    func testFastTourGaitDoesNotLeaveFeetFarBehind() {
+        var gait=CrawlerLegController();gait.reset(at:.init(x:100,y:100))
+        for frame in 0..<90 {
+            let body=DocumentPosition(x:100+Double(frame)*850/60,y:100)
+            gait.advance(body:body,velocity:.init(x:850,y:0),anchors:[],dt:1.0/60,reduceMotion:false)
+            XCTAssertLessThanOrEqual(gait.legs.filter(\.isStepping).count,6)
+            XCTAssertLessThanOrEqual(gait.legs.map {$0.foot.distance(to:body)}.max() ?? 0,CrawlerLegController.maximumReach)
+        }
+    }
+    func testTourSpeedGaitStaysWithinReachThroughAChangeOfDirection() {
+        var gait=CrawlerLegController();gait.reset(at:.init(x:100,y:100))
+        let step=420.0/60
+        for frame in 0..<150 {
+            let previousFeet=gait.legs.map(\.foot)
+            let body:DocumentPosition
+            let velocity:DocumentPosition
+            if frame<75 {
+                body = .init(x:100+Double(frame)*step,y:100)
+                velocity = .init(x:420,y:0)
+            } else {
+                body = .init(x:100+74*step,y:100+Double(frame-74)*step)
+                velocity = .init(x:0,y:420)
+            }
+            gait.advance(body:body,velocity:velocity,anchors:[],dt:1.0/60,reduceMotion:false)
+            XCTAssertLessThanOrEqual(gait.legs.map {$0.foot.distance(to:body)}.max() ?? 0,CrawlerLegController.maximumReach)
+            XCTAssertLessThanOrEqual(gait.legs.filter(\.isStepping).count,6)
+            for i in gait.legs.indices {
+                XCTAssertLessThan(gait.legs[i].foot.distance(to:previousFeet[i]),42,"A normal tour must not need a visual foot reset")
+            }
+        }
+    }
+    func testGaitRecoversFromAJumpWithoutPageSpanningLegs() {
+        var gait=CrawlerLegController();gait.reset(at:.init(x:100,y:100))
+        let body=DocumentPosition(x:1_000,y:1_000)
+        gait.advance(body:body,velocity:.init(x:420,y:0),anchors:[],dt:1.0/60,reduceMotion:false)
+        XCTAssertTrue(gait.legs.allSatisfy {$0.foot.distance(to:body)<=CrawlerLegController.maximumReach})
+    }
+    func testGaitFoldsBackAroundBodyWhenTourStops() {
+        var gait=CrawlerLegController();gait.reset(at:.init(x:100,y:100))
+        let step=420.0/60
+        for frame in 0..<60 {
+            gait.advance(body:.init(x:100+Double(frame)*step,y:100),velocity:.init(x:420,y:0),anchors:[],dt:1.0/60,reduceMotion:false)
+        }
+        let stopped=DocumentPosition(x:100+59*step,y:100)
+        for _ in 0..<60 {
+            gait.advance(body:stopped,velocity:.zero,anchors:[],dt:1.0/60,reduceMotion:false)
+        }
+        XCTAssertTrue(gait.legs.allSatisfy {!$0.isStepping})
+        XCTAssertLessThan(gait.legs.map {$0.foot.distance(to:stopped)}.max() ?? 0,70)
+    }
+    func testRestrictedGaitLandsOnlyOnPermittedAnchors() {
+        let anchors=(0...4).map {TerrainAnchor(id:String($0),position:.init(x:Double($0)*40,y:100),kind:.text)}
+        let allowed=anchors.map(\.position)
+        var gait=CrawlerLegController();gait.reset(at:allowed[0])
+        XCTAssertTrue(gait.plant(body:allowed[0],anchors:anchors))
+        for frame in 0..<30 {
+            gait.advance(body:.init(x:80,y:100),velocity:.init(x:50,y:0),anchors:anchors,dt:1.0/60,reduceMotion:false,strict:true)
+            XCTAssertLessThanOrEqual(gait.legs.filter(\.isStepping).count,4)
+            for leg in gait.legs {
+                XCTAssertTrue(allowed.contains(leg.to))
+                if !leg.isStepping {XCTAssertTrue(allowed.contains(leg.foot))}
+            }
+            if frame==0 {XCTAssertLessThanOrEqual(gait.legs.filter(\.isStepping).count,2)}
+        }
     }
     func testIndependentInstancesDoNotShareMemoryOrMission() {
         var a=ProceduralCrawlerAgent(),b=ProceduralCrawlerAgent()

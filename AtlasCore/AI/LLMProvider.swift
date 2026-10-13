@@ -93,18 +93,25 @@ public final class OllamaProvider: NSObject, LLMProvider, EmbeddingProvider, URL
         return result
     }
     public func validate(model:String) async throws -> AIModel {
-        guard let installed=try await models().first(where:{$0.name == model}) else {throw AIError.unsafeModel}
+        // Inference validates only the selected model. Enumerating capabilities of every
+        // installed model makes a greeting depend on unrelated /show requests.
+        let tags=try await object("tags")
+        guard let rows=tags["models"] as? [[String:Any]],
+              let row=rows.first(where:{$0["name"] as? String == model}),
+              let digest=row["digest"] as? String,!model.contains(":cloud"),
+              row["remote_model"] == nil,row["remote_host"] == nil else {throw AIError.unsafeModel}
         let info=try await object("show",["model":model])
         guard info["remote_model"] == nil,info["remote_host"] == nil,
               let metadata=info["model_info"] as? [String:Any],metadata["general.architecture"] != nil else {throw AIError.unsafeModel}
-        return installed
+        return AIModel(name:model,digest:digest,capabilities:info["capabilities"] as? [String] ?? row["capabilities"] as? [String] ?? [])
     }
     public func chat(model:String,messages:[AIMessage],json:Bool=false)->AsyncThrowingStream<String,Error> {
         AsyncThrowingStream { continuation in
             let task=Task {
                 do {
                     _ = try await self.validate(model:model)
-                    var body:[String:Any] = ["model":model,"messages":messages.map {["role":$0.role,"content":$0.content]},"stream":true,"options":["temperature":0.1,"num_ctx":8192,"num_predict":900]]
+                    let contextSize=messages.reduce(0) {$0+$1.content.utf8.count}>8000 ? 8192 : 4096
+                    var body:[String:Any] = ["model":model,"messages":messages.map {["role":$0.role,"content":$0.content]},"stream":true,"options":["temperature":0.1,"num_ctx":contextSize,"num_predict":900]]
                     if json {body["format"]="json"}
                     let (bytes,response)=try await self.session.bytes(for:self.request("chat",body))
                     guard (response as? HTTPURLResponse)?.statusCode == 200 else {throw AIError.invalidResponse}

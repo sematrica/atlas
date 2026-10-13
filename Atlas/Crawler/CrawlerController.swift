@@ -6,6 +6,7 @@ import AtlasCore
 @MainActor @Observable
 final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler {
     @ObservationIgnored lazy var intelligence=CrawlerIntelligence(crawler:self)
+    @ObservationIgnored lazy var conversation=CrawlerConversation(crawler:self)
     var target=""
     var autoFollow=true
     var debug=false
@@ -25,6 +26,8 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
     @ObservationIgnored private var highlighted:String?
     @ObservationIgnored var reduceMotion=false
     @ObservationIgnored private(set) var perceptionMilliseconds=0.0
+    @ObservationIgnored var pageFootholds:[TerrainAnchor]?
+    @ObservationIgnored private var settlingTime=0.0
     var active:Bool {status != .idle}
     func attach(_ web:WKWebView) {webView=web}
     func prepare() async {
@@ -32,15 +35,15 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
         do {
             _ = try await webView.evaluateJavaScript(DocumentGeometryScript.source,in:nil,contentWorld:.defaultClient)
             guard webView.url == document else {return}
-            ready=true;error=nil;intelligence.arrived()
+            ready=true;error=nil;intelligence.arrived();conversation.companionPageArrived()
         } catch {self.error="Document terrain is unavailable. Reload this article."}
     }
     func navigationStarted() {stop(preserveExpedition:intelligence.transitioning);ready=false}
-    func start(hunt:Bool,semantic:Bool=false,preserveExpedition:Bool=false) {
+    func start(hunt:Bool,semantic:Bool=false,preserveExpedition:Bool=false,preservingConversation:Bool=false) {
         guard ready,let webView else {return}
         let text=target
         guard !(hunt || semantic) || !text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else {return}
-        stop(preserveExpedition:preserveExpedition);epoch=UUID();let token=epoch
+        stop(preserveExpedition:preserveExpedition,preservingConversation:preservingConversation);epoch=UUID();let token=epoch
         reduceMotion=NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         let p=DocumentPosition(x:max(35,viewport.x+min(140,viewport.width*0.2)),y:viewport.y+90)
         agent.start(position:p,mission:semantic ? .semanticHunt(text) : hunt ? .stringHunt(text) : .freeCrawl);legs.reset(at:p);status=agent.state.behavior
@@ -58,12 +61,32 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
                     guard self.epoch == token,!Task.isCancelled else {return}
                     self.agent.pause();self.status = .paused;self.error="Terrain observation stopped. Resume or reload the article."
                 }
-                do {try await Task.sleep(for:.milliseconds(250))}catch{return}
+                do {try await Task.sleep(for:.milliseconds(Int(max(55,min(125,self.radius*300/max(45,self.conversation.speed))))))}catch{return}
             }
         }
         if semantic {intelligence.begin(reset:!preserveExpedition)}
     }
-    func inspectFor(_ seconds:Double) {agent.inspect(for:seconds);status=agent.state.behavior}
+    func inspectFor(_ seconds:Double) {guard active,status != .paused else {return};agent.inspect(for:seconds);status=agent.state.behavior}
+    func setGuidanceSuppressed(_ value:Bool) {agent.suppressHunt(value)}
+    func guide(to position:DocumentPosition) {agent.guide(to:position);status=agent.state.behavior;renderer?.startAnimation()}
+    func endGuidedMovement() {agent.endGuidance();agent.suppressHunt(conversation.wordKind != nil)}
+    func interruptAdvice() {
+        intelligence.cancel()
+        if status == .inspecting {agent.inspect(for:0)}
+    }
+    func restartAdvice() {
+        if case .semanticHunt=agent.state.mission,active,status != .paused,!conversation.isGuiding {intelligence.begin(reset:false,recordArrival:false)}
+    }
+    func highlightWords(_ marks:[CrawlerWordHighlight]) async {
+        guard let webView,let data=try? JSONEncoder().encode(marks),let values=try? JSONSerialization.jsonObject(with:data) else {return}
+        let count=try? await webView.callAsyncJavaScript("return window.atlasTerrain.markWords(marks)",arguments:["marks":values],in:nil,contentWorld:.defaultClient)
+        if conversation.wordKind != nil {conversation.highlightedWords=count as? Int ?? conversation.highlightedWords}
+    }
+    func clearWordHighlights() {webView?.evaluateJavaScript("window.atlasTerrain?.clearWords()",in:nil,in:.defaultClient){_ in}}
+    func plantPageFeet(_ anchors:[TerrainAnchor]) -> Bool {
+        guard legs.plant(body:agent.state.position,anchors:anchors) else {return false}
+        pageFootholds=anchors;return true
+    }
     func steer(to position:DocumentPosition) {agent.steer(to:position)}
     func confirmDiscovery(_ quote:String)->Bool {agent.confirmDiscovery(quote)}
     func refreshPerception() async throws {
@@ -72,6 +95,7 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
         guard epoch == token else {return}
         perceptionMilliseconds=Date().timeIntervalSince(began)*1000
         viewport=sample.viewport;agent.perceive(sample);anchors=agent.observation?.anchors ?? [];status=agent.state.behavior;updateInspector()
+        await conversation.inspect(sample)
     }
     func observe(around position:DocumentPosition,radius:Double) async throws -> CrawlerObservation {
         guard let webView else {throw AtlasError.articleUnavailable}
@@ -81,10 +105,22 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
         return try JSONDecoder().decode(CrawlerObservation.self,from:data)
     }
     func tick(dt:Double) {
-        guard active,status != .paused else {return}
-        agent.advance(dt:dt,reduceMotion:reduceMotion)
+        guard active else {return}
+        if status == .paused {
+            // A companion tour can come to rest with some feet still in flight. Its
+            // display link remains active so the legs can finish replanting nearby.
+            legs.advance(body:agent.state.position,velocity:.zero,anchors:pageFootholds ?? anchors,
+                         dt:min(dt,0.05),reduceMotion:reduceMotion,strict:pageFootholds != nil)
+            settlingTime += min(dt,0.05)
+            if settlingTime>0.45 && !legs.legs.contains(where:\.isStepping) {renderer?.stopAnimation()}
+            return
+        }
+        settlingTime=0
+        let travelSpeed=conversation.companionTouring ? min(420,conversation.speed*1.35) : conversation.speed
+        agent.advance(dt:dt,speed:pageFootholds == nil ? travelSpeed : min(90,conversation.speed),reduceMotion:reduceMotion)
+        if agent.state.behavior == .paused,conversation.movingTo != nil {status = .paused;conversation.reachedDestination()}
         intelligence.didMove()
-        legs.advance(body:agent.state.position,velocity:agent.state.velocity,anchors:anchors,dt:min(dt,0.05),reduceMotion:reduceMotion)
+        legs.advance(body:agent.state.position,velocity:agent.state.velocity,anchors:pageFootholds ?? anchors,dt:min(dt,0.05),reduceMotion:reduceMotion,strict:pageFootholds != nil)
         if status != agent.state.behavior {status=agent.state.behavior}
         if highlighted != nil,agent.state.match == nil {clearHighlight()}
         if status == .found,let match=agent.state.match,highlighted != match.key {
@@ -94,13 +130,14 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
             }
         }
     }
-    func pause() {agent.pause();status=agent.state.behavior;renderer?.stopAnimation();updateInspector()}
-    func resume() {agent.resume();status=agent.state.behavior;renderer?.startAnimation();error=nil}
+    func pause() {conversation.invalidate();intelligence.cancel();agent.pause();status=agent.state.behavior;renderer?.stopAnimation();updateInspector()}
+    func resume() {guard active else {return};agent.resume();status=agent.state.behavior;renderer?.startAnimation();error=nil;restartAdvice()}
     func findNext() {clearHighlight();agent.findNext();status=agent.state.behavior}
     func freeAfterFound() {clearHighlight();agent.resumeFreeCrawl();status=agent.state.behavior}
     func stop() {stop(preserveExpedition:false)}
-    func stop(preserveExpedition:Bool) {
-        if !preserveExpedition {intelligence.cancel()}
+    func stop(preserveExpedition:Bool,preservingConversation:Bool=false) {
+        if !preservingConversation {conversation.navigation()}
+        if !preserveExpedition {conversation.clearPlan();intelligence.cancel();conversation.seekLabel=nil;conversation.wordKind=nil;clearWordHighlights()}
         epoch=UUID();senses?.cancel();senses=nil;agent.stop();status = .idle;renderer?.stopAnimation();clearHighlight();error=nil
     }
     private func clearHighlight() {

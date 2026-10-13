@@ -1,7 +1,7 @@
 import SwiftUI
 
 private enum Destination: String, CaseIterable, Identifiable {
-    case library = "Library", browse = "Browse", search = "Search", ask = "Ask", crawl = "Crawl"
+    case library = "Library", browse = "Browse", search = "Search", ask = "Ask", crawl = "Crawl", research = "Research"
     var id: Self { self }
     var symbol: String {
         switch self {
@@ -9,6 +9,7 @@ private enum Destination: String, CaseIterable, Identifiable {
         case .browse: "book"
         case .search: "magnifyingglass"
         case .ask: "text.bubble"
+        case .research: "text.book.closed"
         case .crawl: "point.3.connected.trianglepath.dotted"
         }
     }
@@ -18,6 +19,7 @@ private enum Destination: String, CaseIterable, Identifiable {
         case .browse: "An encyclopedia, entirely yours."
         case .search: "A direct route to what you need."
         case .ask: "Answers grounded in your library."
+        case .research: "Research your offline library."
         case .crawl: "Let curiosity find a path."
         }
     }
@@ -27,6 +29,7 @@ private enum Destination: String, CaseIterable, Identifiable {
         case .browse: "Read local Wikipedia articles, follow their links, and pick up where you left off."
         case .search: "Find titles and passages with fast, conventional full-text search. No language model required."
         case .ask: "Explore questions with a local model and citations that lead back to your offline articles."
+        case .research: "Autonomous reading, evidence, and cited reports."
         case .crawl: "A procedural creature will explore article terrain and follow links through your library, one discovery at a time."
         }
     }
@@ -59,6 +62,8 @@ struct ContentView: View {
                     LibraryView(model: library)
                 } else if current == .browse || current == .search || current == .crawl {
                     BrowserView(library: library.packages, browser: library.packages.browser, emphasizeSearch: current == .search, emphasizeCrawl: current == .crawl)
+                } else if current == .research {
+                    ResearchView(research:library.packages.research,ai:library.packages.intelligence,browser:library.packages.browser,openSource:{passage in library.packages.browser.openCitation(passage);destination = .browse})
                 } else if current == .ask {
                     IntelligenceView(ai:library.packages.intelligence,browser:library.packages.browser,
                         openSource:{passage in library.packages.browser.openCitation(passage);destination = .browse},

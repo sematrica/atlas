@@ -2,6 +2,7 @@
 #include <zim/archive.h>
 #include <zim/item.h>
 #include <zim/suggestion.h>
+#include <zim/search.h>
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
@@ -57,6 +58,38 @@ int az_search(AZArchive archive, const char *query, int limit, AZMatch **matches
             (*matches)[i].path=strdup(rows[i].first.c_str()); (*matches)[i].title=strdup(rows[i].second.c_str());
         }
         return 1;
+    } AZ_CATCH
+}
+static void copyMatches(const std::vector<std::pair<std::string,std::string>>& rows, AZMatch **matches, int *count) {
+    *count=(int)rows.size(); *matches=static_cast<AZMatch *>(calloc(rows.size(),sizeof(AZMatch)));
+    if(!*matches && !rows.empty()) throw std::bad_alloc();
+    for(size_t i=0;i<rows.size();++i) {(*matches)[i].path=strdup(rows[i].first.c_str());(*matches)[i].title=strdup(rows[i].second.c_str());}
+}
+int az_has_fulltext(AZArchive archive) {try {return static_cast<Reader *>(archive)->archive.hasFulltextIndex();} catch(...) {return 0;}}
+uint64_t az_entry_count(AZArchive archive) {try {return static_cast<Reader *>(archive)->archive.getEntryCount();} catch(...) {return 0;}}
+int az_fulltext(AZArchive archive,const char *query,int limit,AZMatch **matches,int *count,char **error) {
+    try {
+        auto& archiveRef=static_cast<Reader *>(archive)->archive;
+        if(!archiveRef.hasFulltextIndex()) throw std::runtime_error("No full-text index in this archive");
+        zim::Searcher searcher(archiveRef);zim::Query q;q.setQuery(query);
+        auto search=searcher.search(q);auto results=search.getResults(0,std::min(std::max(limit,1),100));
+        std::vector<std::pair<std::string,std::string>> rows;
+        for(auto it=results.begin();it!=results.end();++it) rows.emplace_back(it.getPath(),it.getTitle());
+        copyMatches(rows,matches,count);return 1;
+    } AZ_CATCH
+}
+int az_articles(AZArchive archive,uint64_t offset,int limit,AZMatch **matches,int *count,uint64_t *next,char **error) {
+    try {
+        auto& a=static_cast<Reader *>(archive)->archive;
+        const uint64_t end=std::min<uint64_t>(a.getEntryCount(),offset+std::min(std::max(limit,1),256));
+        std::vector<std::pair<std::string,std::string>> rows;
+        for(auto i=offset;i<end;++i) {
+            auto entry=a.getEntryByPath(static_cast<zim::entry_index_type>(i));
+            if(entry.isRedirect()) continue;
+            auto item=entry.getItem();
+            if(item.getMimetype().find("text/html")!=std::string::npos) rows.emplace_back(item.getPath(),item.getTitle());
+        }
+        *next=end;copyMatches(rows,matches,count);return 1;
     } AZ_CATCH
 }
 int az_validate(AZArchive archive, char **error) {

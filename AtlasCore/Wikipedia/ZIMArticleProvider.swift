@@ -2,7 +2,7 @@ import Foundation
 import ZIMBridge
 
 /// An actor confines libzim's non-thread-safe suggestion searcher.
-public actor ZIMArticleProvider: ArticleProvider, FullTextSearch {
+public actor ZIMArticleProvider: ResearchArticleProvider {
     private let access: LibraryAccess
     private let packageID: String
     private let handle: AZArchive
@@ -37,6 +37,7 @@ public actor ZIMArticleProvider: ArticleProvider, FullTextSearch {
         guard metadata.mimeType.contains("html"), metadata.byteCount < 32*1024*1024 else { throw AtlasError.articleUnavailable }
         var data=Data(); var offset: UInt64=0
         while offset < metadata.byteCount {
+            try Task.checkCancellation()
             let chunk=try read(path:metadata.path,offset:offset,length:262144)
             guard !chunk.isEmpty else { throw AtlasError.articleUnavailable }
             data.append(chunk); offset += UInt64(chunk.count)
@@ -53,6 +54,23 @@ public actor ZIMArticleProvider: ArticleProvider, FullTextSearch {
         return (0..<Int(count)).map {
             SearchResult(articleID:ArticleID(packageID:packageID,path:String(cString:matches[$0].path)),title:String(cString:matches[$0].title),excerpt:"")
         }
+    }
+    public func hasArchiveFullText() throws -> Bool {try access.validate();return az_has_fulltext(handle) != 0}
+    public func fullTextSearch(_ query:String,limit:Int=20) async throws -> [SearchResult] {
+        try access.validate();try Task.checkCancellation()
+        var rows:UnsafeMutablePointer<AZMatch>?;var count:Int32=0;var error:UnsafeMutablePointer<CChar>?
+        defer {az_matches_free(rows,count);az_free(error)}
+        guard az_fulltext(handle,query,Int32(min(100,max(1,limit))),&rows,&count,&error) != 0 else {throw AtlasError.searchUnavailable}
+        guard let rows else {return []}
+        return (0..<Int(count)).map {SearchResult(articleID:.init(packageID:packageID,path:String(cString:rows[$0].path)),title:String(cString:rows[$0].title),excerpt:"")}
+    }
+    public func articleBatch(offset:UInt64) async throws -> ArchiveArticleBatch {
+        try access.validate();try Task.checkCancellation()
+        var rows:UnsafeMutablePointer<AZMatch>?;var count:Int32=0;var next:UInt64=offset;var error:UnsafeMutablePointer<CChar>?
+        defer {az_matches_free(rows,count);az_free(error)}
+        guard az_articles(handle,offset,128,&rows,&count,&next,&error) != 0 else {throw AtlasError.articleUnavailable}
+        let articles=rows.map {p in (0..<Int(count)).map {ArticleID(packageID:packageID,path:String(cString:p[$0].path))}} ?? []
+        return .init(articles:articles,next:next,totalEntries:az_entry_count(handle))
     }
     public func validateArchive() throws {
         try access.validate()

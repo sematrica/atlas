@@ -101,19 +101,29 @@ public struct ProceduralCrawlerAgent: Sendable {
     public private(set) var navigator:CrawlerNavigator
     private var decisionIn=0.0
     private var dwell=0.0
-    private var burstRemaining=1.1
+    private var burstRemaining=0.65
     private var lastRevision:Int?
     private var lastFrontier=DocumentPosition.zero
     private var detour:DocumentPosition?
+    public private(set) var guidedGoal:DocumentPosition?
+    private var suppressMission=false
     public init(id:UUID=UUID(),seed:UInt64=42) { state=CrawlerState(id:id);navigator=CrawlerNavigator(seed:seed) }
     public mutating func start(position:DocumentPosition,mission:CrawlerMission) {
         state=CrawlerState(id:state.id,position:position,mission:mission);state.behavior = .spawning
-        state.desired=position; memory=CrawlerMemory(); navigator.reset(); observation=nil;dwell=0.65;decisionIn=0;lastRevision=nil;detour=nil;lastFrontier=position;burstRemaining=1.1
+        state.desired=position; memory=CrawlerMemory(); navigator.reset(); observation=nil;dwell=0.65;decisionIn=0;lastRevision=nil;detour=nil;lastFrontier=position;burstRemaining=0.65;guidedGoal=nil;suppressMission=false
     }
+    public mutating func suppressHunt(_ suppressed:Bool) {
+        suppressMission=suppressed
+        if suppressed {state.match=nil;if ![.idle,.paused].contains(state.behavior) {state.behavior = .exploring;dwell=0}}
+    }
+    public mutating func guide(to position:DocumentPosition) {
+        guidedGoal=position;suppressHunt(true);state.desired=position;state.behavior = .walking
+    }
+    public mutating func endGuidance() {guidedGoal=nil;detour=nil;decisionIn=0}
     public mutating func steer(to position:DocumentPosition) {
         detour=position;lastFrontier=navigator.frontier;state.desired=position;state.behavior = .walking;decisionIn=0.45
     }
-    public mutating func inspect(for seconds:Double) {state.behavior = .inspecting;dwell=seconds;state.velocity = .zero}
+    public mutating func inspect(for seconds:Double) {state.behavior = .inspecting;dwell=seconds}
     public mutating func confirmDiscovery(_ quote:String)->Bool {
         guard let observation,let match=LocalStringMatcher.find(quote,in:observation,excluding:memory.discoveries) else {return false}
         state.match=match;state.behavior = .targetSuspected;dwell=0.3;return true
@@ -143,12 +153,12 @@ public struct ProceduralCrawlerAgent: Sendable {
         lastRevision=sample.revision
         memory.record(observation!)
         guard ![.found,.paused,.spawning].contains(state.behavior) else {return}
-        if case .stringHunt(let target)=state.mission,
+        if !suppressMission,case .stringHunt(let target)=state.mission,
            let match=LocalStringMatcher.find(target,in:observation!,excluding:memory.discoveries) {
             if state.match?.key != match.key { state.match=match;state.behavior = .targetSuspected;dwell=0.3 }
         }
     }
-    public mutating func advance(dt raw:Double,speed:Double=128,reduceMotion:Bool=false) {
+    public mutating func advance(dt raw:Double,speed:Double=270,reduceMotion:Bool=false) {
         let dt=min(max(raw,0),0.05)
         guard ![.idle,.paused,.found].contains(state.behavior) else {return}
         state.elapsed += dt;decisionIn -= dt;dwell -= dt
@@ -157,20 +167,25 @@ public struct ProceduralCrawlerAgent: Sendable {
         }
         guard let observation else { state.velocity = .zero;return }
         if state.behavior == .targetSuspected {
-            state.velocity = .zero
+            settle(dt:dt)
             if dwell<=0 { state.behavior = .approachingTarget };return
         }
-        if state.behavior == .inspecting && dwell>0 {state.velocity = .zero;return}
+        if state.behavior == .inspecting && dwell>0 {settle(dt:dt);return}
         // Bounded bursts give the insect a quick scan-and-scuttle rhythm without changing coverage.
-        if !reduceMotion,state.match == nil {
+        if !reduceMotion,state.match == nil,guidedGoal == nil {
             burstRemaining -= dt
             if burstRemaining<=0 {
-                burstRemaining=0.75+navigator.random()*0.7
-                state.behavior = .inspecting;dwell=0.16+navigator.random()*0.22
-                state.velocity = .zero;return
+                burstRemaining=0.4+navigator.random()*0.5
+                state.behavior = .inspecting;dwell=0.10+navigator.random()*0.13
+                settle(dt:dt);return
             }
         }
-        if let match=state.match {
+        if let goal=guidedGoal {
+            state.desired=goal
+            if state.position.distance(to:goal)<8 && hypot(state.velocity.x,state.velocity.y)<55 {
+                guidedGoal=nil;state.behavior = .paused;state.velocity = .zero;return
+            }
+        } else if let match=state.match {
             state.desired=match.position
             if state.position.distance(to:match.position)<12 {
                 // Re-confirm using a current local observation, not a previously known global coordinate.
@@ -190,21 +205,39 @@ public struct ProceduralCrawlerAgent: Sendable {
                 }
             }
             state.desired=detour ?? frontier
-            decisionIn=0.22
+            decisionIn=0.10
             if case .freeCrawl=state.mission, navigator.random()<0.04 {
-                state.behavior = .inspecting;dwell=0.25+navigator.random()*0.25
+                state.behavior = .inspecting;dwell=0.16+navigator.random()*0.16
             } else { state.behavior = (state.desired.x-state.position.x)*state.velocity.x+(state.desired.y-state.position.y)*state.velocity.y < 0 ? .turning : .walking }
         }
-        if state.behavior == .inspecting && dwell>0 { state.velocity = .zero;return }
+        if state.behavior == .inspecting && dwell>0 {settle(dt:dt);return}
         let distance=state.position.distance(to:state.desired)
-        guard distance>0.5 else {state.velocity = .zero;return}
+        guard distance>0.5 else {settle(dt:dt);return}
         // Don't outrun the last perception disk; waiting allows the slower senses loop to catch up.
-        if state.position.distance(to:observation.center)>observation.radius*0.5 {state.velocity = .zero;return}
-        let organic=reduceMotion ? 0.65 : 0.93+0.07*sin(state.elapsed*9)
-        let magnitude=min(speed*organic,distance*5)
+        let perceptionRoom=max(0,observation.radius*0.5-state.position.distance(to:observation.center))
+        if perceptionRoom<=0 {state.velocity = .zero;return}
+        let organic=reduceMotion ? 1 : 0.93+0.07*sin(state.elapsed*9)
+        let magnitude=min(max(0,reduceMotion ? min(speed,84) : speed)*organic,
+                          distance*(reduceMotion ? 5 : 10),perceptionRoom*18)
         let vx=(state.desired.x-state.position.x)/distance*magnitude,vy=(state.desired.y-state.position.y)/distance*magnitude
-        let smooth=min(1,dt*(reduceMotion ? 7 : 16))
+        let previousSpeed=hypot(state.velocity.x,state.velocity.y)
+        let alignment=(state.velocity.x*vx+state.velocity.y*vy)/max(1,previousSpeed*magnitude)
+        let turning=previousSpeed>15 && alignment<0.7
+        let response=reduceMotion ? 7.0 : (turning ? 12.0 : 20.0)
+        let smooth=1-exp(-dt*response)
         state.velocity.x += (vx-state.velocity.x)*smooth;state.velocity.y += (vy-state.velocity.y)*smooth
+        state.position=state.position.moved(state.velocity.x*dt,state.velocity.y*dt)
+        let minX=min(20,observation.documentWidth/2),minY=min(20,observation.documentHeight/2)
+        let clampedX=min(max(minX,state.position.x),observation.documentWidth-minX)
+        let clampedY=min(max(minY,state.position.y),observation.documentHeight-minY)
+        if clampedX != state.position.x {state.velocity.x=0;state.position.x=clampedX}
+        if clampedY != state.position.y {state.velocity.y=0;state.position.y=clampedY}
+    }
+
+    private mutating func settle(dt:Double) {
+        let decay=exp(-dt*28)
+        state.velocity.x *= decay;state.velocity.y *= decay
+        if hypot(state.velocity.x,state.velocity.y)<2 {state.velocity = .zero}
         state.position=state.position.moved(state.velocity.x*dt,state.velocity.y*dt)
     }
 }

@@ -6,6 +6,7 @@ import AtlasCore
 final class PackageLibraryModel {
     let browser=BrowserModel()
     let intelligence:IntelligenceModel
+    let research:ResearchModel
     var catalog: [WikipediaPackage] = []
     var records: [PackageRecord] = []
     var progress: [String:TransferProgress] = [:]
@@ -23,7 +24,7 @@ final class PackageLibraryModel {
     private var polling: Task<Void,Never>?
     private var libraryID: UUID?
     init(storage: StorageManager) {
-        self.storage=storage; downloads=DownloadManager(storage:storage);intelligence=IntelligenceModel(storage:storage)
+        self.storage=storage; downloads=DownloadManager(storage:storage);intelligence=IntelligenceModel(storage:storage);research=ResearchModel(storage:storage)
         browser.crawler.intelligence.provider=intelligence.provider
         browser.crawler.intelligence.model=intelligence.chatModel
         browser.crawler.intelligence.persist={discovery in
@@ -45,7 +46,7 @@ final class PackageLibraryModel {
         switch state {
         case .available(let snapshot):
             storageAvailable=true; rootPath=snapshot.root.path
-            if libraryID != snapshot.library.id { intelligence.reset();browser.close(); libraryID=snapshot.library.id }
+            if libraryID != snapshot.library.id { intelligence.reset();research.reset();browser.close(); libraryID=snapshot.library.id }
             do { try await downloads.connect(); await refresh() } catch { message=AtlasLog.message(error) }
             if polling == nil {
                 polling=Task { [weak self] in
@@ -56,11 +57,11 @@ final class PackageLibraryModel {
                 }
             }
         default:
-            storageAvailable=false; rootPath=nil; intelligence.reset();browser.close(); await downloads.disconnect()
+            storageAvailable=false; rootPath=nil; intelligence.reset();research.reset();browser.close(); await downloads.disconnect()
         }
     }
     func refresh() async { let snapshot=await downloads.snapshot(); records=snapshot.records; progress=snapshot.progress }
-    func pauseAll() async { await downloads.pauseAll(); await refresh(); intelligence.reset();browser.close() }
+    func pauseAll() async { await downloads.pauseAll(); await refresh(); intelligence.reset();research.reset();browser.close() }
     func loadCatalog() async {
         guard !loadingCatalog else { return }
         loadingCatalog=true; defer { loadingCatalog=false }
@@ -82,15 +83,15 @@ final class PackageLibraryModel {
         do { try await downloads.connect(); try await downloads.resume(id); await refresh() } catch { message=AtlasLog.message(error) }
     }
     func delete(_ id: String) async {
-        if browser.record?.id == id {intelligence.reset();browser.close()}
+        if browser.record?.id == id {intelligence.reset();research.reset();browser.close()}
         do { try await downloads.delete(id); await refresh() } catch { message=AtlasLog.message(error) }
     }
     func verify(_ id: String) async {
-        if browser.record?.id == id {intelligence.reset();browser.close()}
+        if browser.record?.id == id {intelligence.reset();research.reset();browser.close()}
         do { try await downloads.verify(id); await refresh() } catch { message=AtlasLog.message(error) }
     }
     func open(_ record: PackageRecord) async {
-        do {intelligence.reset();let access=try await storage.acquire();try await browser.open(record:record,access:access)}
+        do {intelligence.reset();research.reset();let access=try await storage.acquire();try await browser.open(record:record,access:access)}
         catch { message=AtlasLog.message(error) }
     }
     func updateAvailable(_ record: PackageRecord) -> Bool {

@@ -23,14 +23,16 @@ public struct CrawlerTerrain: Codable, Identifiable, Sendable {
     public let rect:TerrainRect
     public let text:String
     public let href:String?
-    public init(id:String,group:String,order:Int,kind:TerrainKind,rect:TerrainRect,text:String,href:String?=nil) {
-        self.id=id;self.group=group;self.order=order;self.kind=kind;self.rect=rect;self.text=text;self.href=href
+    public let section:String?
+    public init(id:String,group:String,order:Int,kind:TerrainKind,rect:TerrainRect,text:String,href:String?=nil,section:String?=nil) {
+        self.id=id;self.group=group;self.order=order;self.kind=kind;self.rect=rect;self.text=text;self.href=href;self.section=section
     }
 }
 public struct TerrainAnchor: Sendable, Identifiable {
     public let id:String
     public let position:DocumentPosition
     public let kind:TerrainKind
+    public init(id:String,position:DocumentPosition,kind:TerrainKind) {self.id=id;self.position=position;self.kind=kind}
 }
 public struct CrawlerObservation: Codable, Sendable {
     public let document:String
@@ -64,7 +66,15 @@ public struct CrawlerMatch: Sendable {
     public let text:String
     public let firstOffset:Int
     public let lastOffset:Int
-    public var position:DocumentPosition { rects.first?.center ?? .zero }
+    public var position:DocumentPosition {
+        guard let first=rects.first else {return .zero}
+        // Keep the whole observed phrase in view while approaching, not just its first word.
+        let left=rects.map(\.x).min() ?? first.x
+        let top=rects.map(\.y).min() ?? first.y
+        let right=rects.map {$0.x+$0.width}.max() ?? first.x+first.width
+        let bottom=rects.map {$0.y+$0.height}.max() ?? first.y+first.height
+        return .init(x:(left+right)/2,y:(top+bottom)/2)
+    }
 }
 public struct CrawlerState: Identifiable, Sendable {
     public let id:UUID

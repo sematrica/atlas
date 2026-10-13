@@ -164,4 +164,9 @@ struct OfflineWebView: NSViewRepresentable {
     let crawler:CrawlerController
     func makeNSView(context:Context)->CrawlerSurface { CrawlerSurface(webView:webView,crawler:crawler) }
     func updateNSView(_ nsView:CrawlerSurface,context:Context) {}
+    // The document scrolls inside WebKit. Its previous native frame must not
+    // become a minimum size when SwiftUI inserts controls above the split view.
+    func sizeThatFits(_ proposal:ProposedViewSize,nsView:CrawlerSurface,context:Context)->CGSize? {
+        CGSize(width:proposal.width ?? 350,height:proposal.height ?? 300)
+    }
 }

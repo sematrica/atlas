@@ -33,3 +33,15 @@ public extension ArticleProvider {
 public protocol LinkResolver: Sendable {
     func resolve(_ href: String, relativeTo article: ArticleID) throws -> ArticleID?
 }
+
+public struct ArchiveArticleBatch:Sendable {
+    public let articles:[ArticleID]
+    public let next:UInt64
+    public let totalEntries:UInt64
+    public init(articles:[ArticleID],next:UInt64,totalEntries:UInt64) {self.articles=articles;self.next=next;self.totalEntries=totalEntries}
+}
+public protocol ResearchArticleProvider:ArticleProvider {
+    func hasArchiveFullText() async throws -> Bool
+    func fullTextSearch(_ query:String,limit:Int) async throws -> [SearchResult]
+    func articleBatch(offset:UInt64) async throws -> ArchiveArticleBatch
+}

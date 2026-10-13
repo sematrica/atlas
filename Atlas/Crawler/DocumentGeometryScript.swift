@@ -5,8 +5,8 @@ enum DocumentGeometryScript {
     static let source = #"""
     (() => {
       if(window.atlasTerrain) return;
-      const ids=new WeakMap(); let serial=0, revision=0, dirty=true, building=false;
-      let buckets=new Map(), local=new Map(), generation=0;
+      const ids=new WeakMap(), sections=new WeakMap(); let serial=0, revision=0, dirty=true, building=false;
+      let buckets=new Map(), local=new Map(), generation=0, wordMarks=new Map();
       const identify=n=> {if(!ids.has(n)) ids.set(n,'terrain-'+(++serial));return ids.get(n);};
       const rect=r=>({x:r.left+scrollX,y:r.top+scrollY,width:r.width,height:r.height});
       const inside=(r,p,radius)=> r.width>=0 && r.height>0 &&
@@ -14,19 +14,21 @@ enum DocumentGeometryScript {
       const viewport=()=>({x:scrollX,y:scrollY,width:innerWidth,height:innerHeight});
       const metrics=()=>({viewport:viewport(),documentWidth:Math.max(document.documentElement.scrollWidth,innerWidth),
         documentHeight:Math.max(document.documentElement.scrollHeight,innerHeight),revision:revision});
-      function invalidate(){ dirty=true;revision++;generation++;building=false; }
+      function invalidate(){ CSS.highlights?.delete('atlas-page');wordMarks.clear();CSS.highlights?.delete('atlas-words');dirty=true;revision++;generation++;building=false; }
       new ResizeObserver(invalidate).observe(document.body);
       new MutationObserver(changes=>{if(changes.some(c=>c.type==='childList'||c.type==='characterData'))invalidate();})
         .observe(document.body,{childList:true,subtree:true,characterData:true});
       addEventListener('resize',invalidate);document.addEventListener('load',invalidate,true);
       function build(){
         if(building||!dirty)return;building=true;dirty=false;buckets=new Map();const epoch=generation;
-        const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_ELEMENT);
+        const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_ELEMENT);const sectionStack=[];
         function batch(){
           if(epoch!==generation)return;
           let node,count=0;
           while(count++<400 && (node=walker.nextNode())) {
+            if(/^H[1-6]$/.test(node.tagName)){const level=Number(node.tagName[1]);while(sectionStack.length&&sectionStack.at(-1).level>=level)sectionStack.pop();sectionStack.push({level,title:(node.textContent||'').trim().slice(0,160)});}
             if(!node.matches('p,li,h1,h2,h3,h4,h5,h6,td,th,figcaption,img,hr,pre,dt,dd'))continue;
+            sections.set(node,sectionStack.map(s=>s.title).join(' › ').slice(0,500));
             const box=rect(node.getBoundingClientRect());if(!box.height||!box.width)continue;
             for(let y=Math.floor(box.y/256);y<=Math.floor((box.y+box.height)/256);y++) {
               if(!buckets.has(y))buckets.set(y,[]);buckets.get(y).push({node,box});
@@ -83,7 +85,7 @@ enum DocumentGeometryScript {
               const r=rect(range.getBoundingClientRect());if(!inside(r,p,radius))continue;
               const id=identify(node)+':'+match.index;const link=node.parentElement.closest('a');
               const kind=node.parentElement.closest('h1,h2,h3,h4,h5,h6')?'heading':node.parentElement.closest('sup')?'citation':link?'link':'text';
-              terrain.push({id,group:identify(element),order:index,kind,rect:r,text:match[0],href:link?.getAttribute('href')||null});
+              terrain.push({id,group:identify(element),order:index,kind,rect:r,text:match[0],href:link?.getAttribute('href')||null,section:sections.get(element)||null});
               local.set(id,{node,start:match.index,end:match.index+match[0].length});characters+=match[0].length;
             }
             if(truncated)break;
@@ -98,8 +100,74 @@ enum DocumentGeometryScript {
         for(const [i,id] of ids.entries()) {const t=local.get(id);if(!t||!t.node.isConnected)return false;const r=document.createRange();r.setStart(t.node,t.start+(i===0?firstOffset:0));r.setEnd(t.node,i===ids.length-1?t.start+lastOffset:t.end);ranges.push(r);}
         CSS.highlights.set('atlas-found',new Highlight(...ranges));return true;
       }
-      const style=document.createElement('style');style.textContent='::highlight(atlas-found){background-color:#f5da7b;color:#171b19}';document.head.appendChild(style);
-      window.atlasTerrain={observe,metrics,highlight,clear:()=>CSS.highlights?.delete('atlas-found'),
+      function markWords(marks) {
+        if(!CSS.highlights)return 0;
+        for(const mark of marks.slice(0,100)) {
+          const t=local.get(mark.id);if(!t||!t.node.isConnected)continue;
+          if(!Number.isInteger(mark.start)||!Number.isInteger(mark.end)||mark.start<0||mark.end<=mark.start||t.start+mark.end>t.end)continue;
+          const key=mark.id+':'+mark.start+':'+mark.end;
+          const r=document.createRange();r.setStart(t.node,t.start+mark.start);r.setEnd(t.node,t.start+mark.end);wordMarks.set(key,r);
+        }
+        while(wordMarks.size>600)wordMarks.delete(wordMarks.keys().next().value);
+        CSS.highlights.set('atlas-words',new Highlight(...wordMarks.values()));return wordMarks.size;
+      }
+
+      let pageNodes=new Map(),pageRanges=new Map(),pageRevision=-1;
+      function pageMap(){
+        pageNodes=new Map();pageRanges=new Map();pageRevision=revision;
+        const blocks=[],links=[],images=[],groups=new Map();let size=0,textTruncated=false,mediaTruncated=false,lastBlock=null,part=0;
+        const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);let node,lastHeading=null;const sectionStack=[];
+        while((node=walker.nextNode())) {
+          const parent=node.parentElement;
+          if(!parent||parent.closest('script,style,noscript,[hidden],nav,footer'))continue;
+          const style=getComputedStyle(parent);if(style.visibility==='hidden'||style.display==='none')continue;
+          const r=document.createRange();r.selectNodeContents(node);if(!r.getClientRects().length)continue;
+          if(size+node.data.length>2000000){textTruncated=true;break;}
+          size+=node.data.length;
+          const heading=parent.closest('h2,h3,h4,h5,h6');
+          if(heading&&heading!==lastHeading) {
+            const level=Number(heading.tagName[1]);
+            while(sectionStack.length&&sectionStack.at(-1).level>=level)sectionStack.pop();
+            sectionStack.push({level,title:(heading.textContent||'').trim().slice(0,160)});
+            lastHeading=heading;
+          }
+          const element=parent.closest('p,li,td,th,figcaption,pre,dt,dd,h1,h2,h3,h4,h5,h6')||parent;
+          const base=identify(element);if(lastBlock!==base){part++;lastBlock=base;}
+          const id=base+':block-'+part;let group=groups.get(id);
+          if(!group){group={id,text:'',section:sectionStack.map(item=>item.title).join(' › ')||'introduction',rect:rect(element.getBoundingClientRect()),nodes:[]};groups.set(id,group);}
+          group.nodes.push({node,start:group.text.length,end:group.text.length+node.data.length});group.text+=node.data;
+        }
+        for(const group of groups.values()) {pageNodes.set(group.id,group);blocks.push({id:group.id,text:group.text,rect:group.rect,section:group.section});}
+        for(const element of document.querySelectorAll('a[href],img')) {
+          if(element.closest('[hidden],nav,footer'))continue;
+          const style=getComputedStyle(element),box=element.getBoundingClientRect();
+          if(style.visibility==='hidden'||style.display==='none'||!box.width||!box.height)continue;
+          if(links.length+images.length>=30000){mediaTruncated=true;break;}
+          const id=identify(element),r=document.createRange();r.selectNode(element);pageRanges.set(id,r);
+          const item={id,text:element.textContent||element.getAttribute('alt')||'',rect:rect(box),href:element.getAttribute('href')};
+          (element.tagName==='IMG'?images:links).push(item);
+        }
+        return {document:location.href,blocks,links,images,textTruncated,mediaTruncated,truncated:textTruncated||mediaTruncated,...metrics()};
+      }
+      function pageRange(value){
+        const group=pageNodes.get(value.id);if(!group||pageRevision!==revision)return null;
+        if(!Number.isInteger(value.start)||!Number.isInteger(value.end)||value.start<0||value.end<=value.start||value.end>group.text.length)return null;
+        const a=group.nodes.find(n=>n.start<=value.start&&n.end>value.start),b=group.nodes.find(n=>n.start<value.end&&n.end>=value.end);
+        if(!a||!b||!a.node.isConnected||!b.node.isConnected)return null;
+        const r=document.createRange();r.setStart(a.node,value.start-a.start);r.setEnd(b.node,value.end-b.start);return r;
+      }
+      function pageResolve(values,expected){
+        if(expected!==revision||pageRevision!==revision)throw Error('Page geometry changed. Please retry.');
+        return values.map(value=>{const r=pageRange(value);if(!r)throw Error('Text range is stale');return {range:value,rect:rect([...r.getClientRects()].find(box=>box.width>0&&box.height>0)||r.getBoundingClientRect())};});
+      }
+      function pageMark(value,expected,append){
+        if(expected!==revision||pageRevision!==revision||!CSS.highlights)return false;
+        const r=value.end===undefined?pageRanges.get(value.id):pageRange(value);if(!r)return false;
+        let h=append?CSS.highlights.get('atlas-page'):null;if(!h)h=new Highlight();h.add(r);CSS.highlights.set('atlas-page',h);return true;
+      }
+
+      const style=document.createElement('style');style.textContent='::highlight(atlas-page){background-color:#f5da7b;color:#171b19}::highlight(atlas-found){background-color:#f5da7b;color:#171b19}::highlight(atlas-words){background-color:#7fdec9;color:#10221d}';document.head.appendChild(style);
+      window.atlasTerrain={observe,metrics,highlight,markWords,pageMap,pageResolve,pageMark,clearWords:()=>{wordMarks.clear();CSS.highlights?.delete('atlas-words');CSS.highlights?.delete('atlas-page');},clear:()=>CSS.highlights?.delete('atlas-found'),
         follow:(x,y,smooth)=>{const margin=100;let dx=0,dy=0;if(y-scrollY<margin)dy=y-scrollY-margin;else if(y-scrollY>innerHeight-margin)dy=y-scrollY-innerHeight+margin;
           if(x-scrollX<60)dx=x-scrollX-60;else if(x-scrollX>innerWidth-60)dx=x-scrollX-innerWidth+60;
           if(Math.abs(dx)>2||Math.abs(dy)>2)scrollBy({left:dx,top:dy,behavior:smooth?'smooth':'instant'});}};
