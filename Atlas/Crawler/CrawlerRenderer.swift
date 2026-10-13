@@ -72,7 +72,11 @@ final class CrawlerRenderer:NSView {
             context.move(to:CGPoint(x:p.x,y:p.y));context.addLine(to:CGPoint(x:state.desired.x,y:state.desired.y));context.strokePath()
         }
         drawTouches(context)
-        if crawler.neonStyle {drawNeonCreature(context,at:p,state:state)} else {drawAmberCreature(context,at:p,state:state)}
+        switch crawler.look {
+        case .constellation: drawConstellationCreature(context,at:p,state:state)
+        case .neon: drawNeonCreature(context,at:p,state:state)
+        case .mechanical: drawAmberCreature(context,at:p,state:state)
+        }
     }
     /// The original amber mechanical creature.
     private func drawAmberCreature(_ context:CGContext,at p:DocumentPosition,state:CrawlerState) {
@@ -141,28 +145,220 @@ final class CrawlerRenderer:NSView {
     static let neonBlue=NSColor(calibratedRed:0.40,green:0.50,blue:1,alpha:1)
     static let neonPink=NSColor(calibratedRed:1,green:0.25,blue:0.44,alpha:1)
 
-    /// Neon boxes around the words the feet touch, fading after the foot lifts.
+    static let ink=NSColor(calibratedRed:0.024,green:0.031,blue:0.055,alpha:1)
+    static let starlight=NSColor.white
+    static let coreOrange=NSColor(calibratedRed:1,green:0.59,blue:0.16,alpha:1)
+    static let amber=NSColor(calibratedRed:0.88,green:0.73,blue:0.44,alpha:1)
+    static let steel=NSColor(calibratedRed:0.45,green:0.55,blue:0.62,alpha:1)
+
+    /// Glowing boxes around the words the feet touch, fading after the foot lifts, in the look's colors.
     private func drawTouches(_ context:CGContext) {
         guard crawler.touchGlow,!crawler.touchMarks.isEmpty else {return}
         let now=ProcessInfo.processInfo.systemUptime
         for mark in crawler.touchMarks.values {
             let alpha=CrawlerController.touchAlpha(now-mark.time)
             guard alpha>0.01 else {continue}
-            let color:NSColor,filled:Bool
-            switch mark.style {
-            case .cyanOutline: color=Self.neonCyan;filled=false
-            case .blueOutline: color=Self.neonBlue;filled=false
-            case .pinkFill: color=Self.neonPink;filled=true
-            case .blueFill: color=Self.neonBlue;filled=true
-            case .cyanFill: color=Self.neonCyan;filled=true
-            }
+            let (color,fill)=Self.touchColors(mark.style,look:crawler.look)
             let box=CGRect(x:mark.rect.x-3,y:mark.rect.y-1.5,width:mark.rect.width+6,height:mark.rect.height+3)
+            // White light needs a dark edge to show on a white page.
+            if crawler.look == .constellation,mark.style != .pinkFill {
+                context.saveGState()
+                context.setShadow(offset:.zero,blur:4,color:Self.ink.withAlphaComponent(0.55*alpha).cgColor)
+                context.setStrokeColor(Self.ink.withAlphaComponent(0.35*alpha).cgColor);context.setLineWidth(2.2);context.stroke(box)
+                context.restoreGState()
+            }
             context.saveGState()
-            context.setShadow(offset:.zero,blur:9*alpha,color:color.withAlphaComponent(0.85*alpha).cgColor)
-            if filled {context.setFillColor(color.withAlphaComponent(0.34*alpha).cgColor);context.fill(box)}
-            context.setStrokeColor(color.withAlphaComponent(0.95*alpha).cgColor);context.setLineWidth(1.6)
+            if fill>0 {context.setFillColor(color.withAlphaComponent(fill*alpha).cgColor);context.fill(box)}
+            context.setShadow(offset:.zero,blur:(crawler.look == .constellation ? 7 : 9)*alpha,color:color.withAlphaComponent(0.85*alpha).cgColor)
+            context.setStrokeColor(color.withAlphaComponent(0.95*alpha).cgColor);context.setLineWidth(crawler.look == .constellation ? 1.1 : 1.6)
             context.stroke(box)
             context.restoreGState()
+        }
+    }
+    /// The outline color of a touch box and how strongly it is filled (0 for an outline only).
+    static func touchColors(_ style:TouchMark.Style,look:CreatureLook)->(NSColor,Double) {
+        switch look {
+        case .constellation:
+            switch style {
+            case .cyanOutline: return (starlight,0)
+            case .blueOutline: return (starlight,0)
+            case .pinkFill: return (coreOrange,0.3)
+            case .blueFill,.cyanFill: return (starlight,0.28)
+            }
+        case .neon:
+            switch style {
+            case .cyanOutline: return (neonCyan,0)
+            case .blueOutline: return (neonBlue,0)
+            case .pinkFill: return (neonPink,0.34)
+            case .blueFill: return (neonBlue,0.34)
+            case .cyanFill: return (neonCyan,0.34)
+            }
+        case .mechanical:
+            switch style {
+            case .cyanOutline: return (amber,0)
+            case .blueOutline: return (steel,0)
+            case .pinkFill,.cyanFill: return (amber,0.3)
+            case .blueFill: return (steel,0.3)
+            }
+        }
+    }
+
+    /// A constellation in a dark crystal: a spine of glass spheres with an orange core, a haloed
+    /// head and a slanting beam of light, after a sacred-geometry figure. The legs leave from the
+    /// lattice's side nodes. The crystal carries its own night sky, so the white light shows on white pages.
+    private func drawConstellationCreature(_ context:CGContext,at p:DocumentPosition,state:CrawlerState) {
+        let spawn=min(1,state.elapsed/0.65)
+        let stepBalance=crawler.reduceMotion ? 0 : crawler.legs.legs.enumerated().reduce(0.0) {sum,entry in sum+entry.element.lift*(entry.offset<4 ? 1 : -1)}
+        let angle=crawler.legs.heading+stepBalance*0.02,c=cos(angle),s=sin(angle)
+        // Body-local coordinates: x points forward, y to the right; the figure is drawn 10% larger.
+        func at(_ x:Double,_ y:Double)->CGPoint {
+            let x=x*1.1,y=y*1.1
+            return CGPoint(x:p.x+c*x-s*y,y:p.y+s*x+c*y)
+        }
+        func pair(_ x:Double,_ y:Double)->[CGPoint] {[at(x,-y),at(x,y)]}
+        let head=at(21.8,0),neck=at(17.4,0),upper=at(9.4,0),hub=at(0,0),lower=at(-7.1,0),core=at(-15.6,0)
+        let waist=at(-19.7,0),tail=at(-28.7,0),tailDots=[(at(-37.3,0),1.1),(at(-40.6,0),1.3),(at(-42.5,0),0.6)]
+        let shoulders=pair(11.8,8.7),arms=pair(4.05,8.7),wings=pair(-2.1,13.5),hips=pair(-9.5,8.7),flanks=pair(-22.5,8.7)
+        let mounts=[shoulders,arms,wings,hips]
+        let found=state.behavior == .found
+        let ink=Self.ink,light=Self.starlight
+        func point(_ d:DocumentPosition)->CGPoint {
+            CGPoint(x:p.x+(d.x-p.x)*spawn,y:p.y+(d.y-p.y)*spawn)
+        }
+        func lines(_ segments:[(CGPoint,CGPoint,Double,Double)],underlay:Bool,glow:Bool=true) {
+            context.saveGState();context.setLineCap(.round)
+            if underlay {
+                context.setShadow(offset:.zero,blur:2.5,color:ink.withAlphaComponent(0.55).cgColor)
+                for (a,b,alpha,width) in segments {
+                    context.setStrokeColor(ink.withAlphaComponent(0.3*alpha).cgColor);context.setLineWidth(width+1.3)
+                    context.move(to:a);context.addLine(to:b);context.strokePath()
+                }
+            } else {
+                if glow {context.setShadow(offset:.zero,blur:3,color:light.withAlphaComponent(0.85).cgColor)}
+                for (a,b,alpha,width) in segments {
+                    context.setStrokeColor(light.withAlphaComponent(min(1,alpha)).cgColor);context.setLineWidth(width)
+                    context.move(to:a);context.addLine(to:b);context.strokePath()
+                }
+            }
+            context.restoreGState()
+        }
+        func dot(_ q:CGPoint,_ r:Double,alpha:Double=1) {
+            context.saveGState()
+            context.setShadow(offset:.zero,blur:2.5,color:ink.withAlphaComponent(0.6).cgColor)
+            context.setFillColor(ink.withAlphaComponent(0.4).cgColor)
+            context.fillEllipse(in:CGRect(x:q.x-r-0.7,y:q.y-r-0.7,width:(r+0.7)*2,height:(r+0.7)*2))
+            context.setShadow(offset:.zero,blur:4,color:light.withAlphaComponent(0.95).cgColor)
+            context.setFillColor(light.withAlphaComponent(alpha).cgColor)
+            context.fillEllipse(in:CGRect(x:q.x-r,y:q.y-r,width:r*2,height:r*2))
+            context.restoreGState()
+        }
+        func sparkle(_ q:CGPoint,_ length:Double) {
+            context.saveGState()
+            context.setShadow(offset:.zero,blur:3,color:light.cgColor)
+            context.setStrokeColor(light.withAlphaComponent(0.95).cgColor);context.setLineWidth(0.5)
+            context.move(to:CGPoint(x:q.x-length,y:q.y));context.addLine(to:CGPoint(x:q.x+length,y:q.y))
+            context.move(to:CGPoint(x:q.x,y:q.y-length));context.addLine(to:CGPoint(x:q.x,y:q.y+length));context.strokePath()
+            context.restoreGState()
+        }
+        func radial(_ q:CGPoint,_ r:Double,_ colors:[NSColor],_ locations:[CGFloat]) {
+            guard let gradient=CGGradient(colorsSpace:CGColorSpaceCreateDeviceRGB(),colors:colors.map(\.cgColor) as CFArray,locations:locations) else {return}
+            context.drawRadialGradient(gradient,startCenter:q,startRadius:0,endCenter:q,endRadius:r,options:[])
+        }
+        func sphere(_ q:CGPoint,_ r:Double) {
+            let disc=CGRect(x:q.x-r,y:q.y-r,width:r*2,height:r*2)
+            context.saveGState()
+            context.setShadow(offset:.zero,blur:5,color:light.withAlphaComponent(0.7).cgColor)
+            context.setFillColor(light.withAlphaComponent(0.28).cgColor);context.fillEllipse(in:disc)
+            context.restoreGState()
+            radial(q,r,[light.withAlphaComponent(0.6),light.withAlphaComponent(0.16),light.withAlphaComponent(0.02)],[0,0.35,1])
+            context.setStrokeColor(light.withAlphaComponent(0.7).cgColor);context.setLineWidth(0.45);context.strokeEllipse(in:disc)
+            sparkle(q,r*0.5)
+        }
+        func polygon(_ points:[CGPoint]) {
+            guard let first=points.first else {return}
+            context.move(to:first);for q in points.dropFirst() {context.addLine(to:q)};context.closePath()
+        }
+
+        context.saveGState();defer {context.restoreGState()}
+        context.setAlpha(spawn)
+        // 1. Legs, beneath the crystal: from a side node to the knee to the foot.
+        var legLines:[(CGPoint,CGPoint,Double,Double)]=[]
+        for i in crawler.legs.legs.indices {
+            let mount=mounts[i%4][i<4 ? 0 : 1],knee=point(crawler.legs.knee(i,body:p)),foot=point(crawler.legs.drawnFoot(i,body:p))
+            legLines.append((mount,knee,0.5,0.5));legLines.append((knee,foot,0.5,0.5))
+        }
+        lines(legLines,underlay:true);lines(legLines,underlay:false)
+        // 2. The crystal: the figure's night sky, with a faint glass rim.
+        let hull=[at(29.5,0),at(13.5,-11.5),at(-2.1,-17),at(-24,-11.5),at(-35,0),at(-24,11.5),at(-2.1,17),at(13.5,11.5)]
+        context.saveGState()
+        context.setShadow(offset:.zero,blur:8,color:ink.withAlphaComponent(0.55).cgColor)
+        context.setFillColor(ink.withAlphaComponent(0.74).cgColor);polygon(hull);context.fillPath()
+        context.restoreGState()
+        context.setStrokeColor(light.withAlphaComponent(0.22).cgColor);context.setLineWidth(0.5);context.setLineJoin(.round)
+        polygon(hull);context.strokePath()
+        // 3. Translucent facets, then the lattice.
+        var facets:[([CGPoint],Double)]=[([neck,shoulders[0],shoulders[1]],0.07),([shoulders[0],shoulders[1],hub],0.13),([hips[0],hips[1],tail],0.08),([hub,hips[0],hips[1]],0.05)]
+        for k in 0..<2 {facets+=[([shoulders[k],arms[k],hub],0.06),([arms[k],wings[k],hub],0.09),([wings[k],hips[k],hub],0.06)]}
+        for (points,alpha) in facets {context.setFillColor(light.withAlphaComponent(alpha).cgColor);polygon(points);context.fillPath()}
+        var lattice:[(CGPoint,CGPoint,Double,Double)]=[(head,tailDots[2].0,0.72,0.72)]
+        for k in 0..<2 {
+            lattice+=[(neck,shoulders[k],0.96,0.66),(shoulders[k],arms[k],0.96,0.66),(shoulders[k],hub,0.72,0.6),(arms[k],hub,0.84,0.6),(arms[k],wings[k],0.96,0.66),
+                      (wings[k],hub,0.84,0.6),(hub,hips[k],0.6,0.54),(wings[k],hips[k],0.96,0.66),(hips[k],flanks[k],0.96,0.66),(hips[k],core,0.66,0.54),
+                      (flanks[k],core,0.6,0.54),(flanks[k],tail,0.9,0.66)]
+        }
+        lines(lattice,underlay:false)
+        // 4. The beam: from the left wing through the tail sphere and on, fading at both ends.
+        do {
+            let from=wings[0],dx=tail.x-from.x,dy=tail.y-from.y,length=max(0.001,hypot(dx,dy)),ux=dx/length,uy=dy/length
+            let start=CGPoint(x:from.x-ux*6.6,y:from.y-uy*6.6),span=length+6.6+50.6
+            context.saveGState()
+            context.setShadow(offset:.zero,blur:6,color:NSColor(calibratedRed:1,green:0.78,blue:0.55,alpha:1).cgColor)
+            context.setLineCap(.butt);context.setLineWidth(1.2)
+            let pieces=24
+            for n in 0..<pieces {
+                let t0=Double(n)/Double(pieces),t1=Double(n+1)/Double(pieces),t=(t0+t1)/2
+                let alpha=t<0.12 ? 0.2+0.8*t/0.12 : t<0.55 ? 1 : max(0,1-(t-0.55)/0.45)
+                context.setStrokeColor(light.withAlphaComponent(alpha).cgColor)
+                context.move(to:CGPoint(x:start.x+ux*span*t0,y:start.y+uy*span*t0))
+                context.addLine(to:CGPoint(x:start.x+ux*span*t1,y:start.y+uy*span*t1));context.strokePath()
+            }
+            context.restoreGState()
+        }
+        // 5. Nodes, glass spheres, the haloed head and the orange core.
+        for k in 0..<2 {for q in [shoulders[k],arms[k],wings[k],hips[k],flanks[k]] {dot(q,1.35)}}
+        dot(neck,1.25);dot(hub,1.7);dot(waist,1.1)
+        for (q,r) in tailDots {dot(q,r)}
+        sphere(upper,3.6);sphere(lower,3.7);sphere(tail,3.8)
+        context.saveGState()
+        context.setShadow(offset:.zero,blur:3,color:light.withAlphaComponent(0.9).cgColor)
+        context.setStrokeColor(light.withAlphaComponent(crawler.conversation.busy ? 1 : 0.8).cgColor);context.setLineWidth(crawler.conversation.busy ? 0.8 : 0.5)
+        context.strokeEllipse(in:CGRect(x:head.x-5.5,y:head.y-5.5,width:11,height:11))
+        context.restoreGState()
+        dot(head,1.9)
+        let glow=found ? NSColor.systemGreen : Self.coreOrange,r=4.4*1.1
+        context.saveGState()
+        context.setShadow(offset:.zero,blur:14,color:glow.withAlphaComponent(0.95).cgColor)
+        context.setFillColor(glow.cgColor)
+        let disc=CGRect(x:core.x-r,y:core.y-r,width:r*2,height:r*2)
+        context.fillEllipse(in:disc);context.fillEllipse(in:disc)
+        context.restoreGState()
+        radial(core,r,found ? [NSColor(calibratedRed:0.9,green:1,blue:0.9,alpha:1),NSColor.systemGreen,NSColor.systemGreen.withAlphaComponent(0.9)]
+                            : [NSColor(calibratedRed:1,green:0.96,blue:0.86,alpha:1),NSColor(calibratedRed:1,green:0.75,blue:0.31,alpha:1),NSColor(calibratedRed:1,green:0.55,blue:0.08,alpha:1),NSColor(calibratedRed:0.94,green:0.43,blue:0,alpha:0.95)],
+               found ? [0,0.5,1] : [0,0.3,0.75,1])
+        sparkle(core,2.4)
+        // 6. Knees and feet; a planted foot wears a faint ring.
+        for i in crawler.legs.legs.indices {
+            let leg=crawler.legs.legs[i],knee=point(crawler.legs.knee(i,body:p)),foot=point(crawler.legs.drawnFoot(i,body:p))
+            dot(knee,0.8,alpha:0.8)
+            let planted=leg.lift<0.05
+            dot(foot,planted ? 1.3 : 0.9)
+            if planted {
+                context.saveGState()
+                context.setShadow(offset:.zero,blur:2,color:light.withAlphaComponent(0.8).cgColor)
+                context.setStrokeColor(light.withAlphaComponent(0.6).cgColor);context.setLineWidth(0.45)
+                context.strokeEllipse(in:CGRect(x:foot.x-3.3,y:foot.y-3.3,width:6.6,height:6.6))
+                context.restoreGState()
+            }
         }
     }
 

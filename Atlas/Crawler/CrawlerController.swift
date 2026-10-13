@@ -10,10 +10,12 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
     var target=""
     var autoFollow=true
     var debug=false
-    /// Words under the spider's feet get a neon box and glow, fading after it moves on.
+    /// Words under the spider's feet get a glowing box, fading after it moves on.
     var touchGlow=true {didSet {if !touchGlow {touchMarks=[:];webView?.evaluateJavaScript("window.atlasTerrain?.clearTouch()",in:nil,in:.defaultClient){_ in};renderer?.needsDisplay=true}}}
-    /// Neon debug-style creature (cyan legs, pink joints); off draws the amber mechanical spider.
-    var neonStyle=true {didSet {renderer?.needsDisplay=true}}
+    /// How the creature and its touch boxes are drawn; remembered between launches.
+    var look=CreatureLook(rawValue:UserDefaults.standard.string(forKey:"atlas.crawler.look") ?? "") ?? .constellation {
+        didSet {UserDefaults.standard.set(look.rawValue,forKey:"atlas.crawler.look");renderer?.needsDisplay=true}
+    }
     /// Words the feet are touching or touched recently, keyed by word or link.
     @ObservationIgnored private(set) var touchMarks:[String:TouchMark]=[:]
     @ObservationIgnored private var lastTouchScan=0.0
@@ -73,7 +75,7 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
                     try await self.refreshPerception()
                     guard self.epoch == token,!Task.isCancelled else {return}
                     if self.touchGlow {
-                        _ = try? await webView.callAsyncJavaScript("return window.atlasTerrain?.touch(points)",arguments:["points":self.touchPoints()],in:nil,contentWorld:.defaultClient)
+                        _ = try? await webView.callAsyncJavaScript("return window.atlasTerrain?.touch(points,tint)",arguments:["points":self.touchPoints(),"tint":self.look.touchTint],in:nil,contentWorld:.defaultClient)
                         if self.status == .paused {self.scanTouches(force:true);self.renderer?.needsDisplay=true}
                     }
                     if self.autoFollow && ![.paused,.found,.idle].contains(self.status) {
@@ -247,13 +249,40 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
     }
 }
 
-/// A word or link the spider touched, drawn as a neon box on the overlay.
+/// The creature's drawing style.
+enum CreatureLook:String,CaseIterable,Identifiable {
+    /// A lattice of light in a dark crystal, with an orange core (the default).
+    case constellation
+    /// Cyan limbs, pink joints and a boxy body.
+    case neon
+    /// The original amber mechanical spider.
+    case mechanical
+    var id:String {rawValue}
+    var title:String {
+        switch self {
+        case .constellation: "Constellation"
+        case .neon: "Neon"
+        case .mechanical: "Mechanical"
+        }
+    }
+    /// The glow color of touched letters, as "r,g,b" for the page script.
+    var touchTint:String {
+        switch self {
+        case .constellation: "255,150,40"
+        case .neon: "64,236,255"
+        case .mechanical: "224,186,112"
+        }
+    }
+}
+
+/// A word or link the spider touched, drawn as a glowing box on the overlay.
 struct TouchMark {
     enum Style:Int {case cyanOutline,blueOutline,pinkFill,blueFill,cyanFill}
     var rect:TerrainRect
     let style:Style
     var time:Double
-    /// Mostly cyan outlines, links in blue, and an occasional filled box, stable per word.
+    /// Mostly plain outlines, links set apart, and an occasional filled box, stable per word.
+    /// Each look maps these to its own colors.
     static func style(for key:String,kind:TerrainKind)->Style {
         let hash=key.unicodeScalars.reduce(UInt32(2166136261)) {($0 ^ $1.value) &* 16777619}
         switch hash%9 {

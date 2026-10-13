@@ -25,8 +25,10 @@ struct CrawlerControls:View {
                 }
                 Spacer()
                 Toggle("Auto Follow",isOn:$crawler.autoFollow).toggleStyle(.checkbox)
-                Toggle("Touch glow",isOn:$crawler.touchGlow).toggleStyle(.checkbox).help("Words under the spider's feet glow in neon boxes")
-                Toggle("Neon",isOn:$crawler.neonStyle).toggleStyle(.checkbox).help("Neon creature; off shows the amber mechanical spider")
+                Toggle("Touch glow",isOn:$crawler.touchGlow).toggleStyle(.checkbox).help("Words under the spider's feet glow in boxes")
+                Picker("Look",selection:$crawler.look) {
+                    ForEach(CreatureLook.allCases) {Text($0.title).tag($0)}
+                }.pickerStyle(.menu).fixedSize().help("How the creature is drawn")
                 Toggle("Debug",isOn:$crawler.debug).toggleStyle(.checkbox)
             }.font(.caption)
 

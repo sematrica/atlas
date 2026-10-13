@@ -25,7 +25,7 @@ Removed: `AtlasCore/Crawler/CrawlerCompanion.swift` (regex guards, fixed tool me
 
 **Ollama** (`AtlasCore/AI/LLMProvider.swift`, new `OllamaProvider.swift`): schema-constrained output with a fallback to JSON mode for Ollama < 0.5; model validation cached for 10 minutes instead of two extra requests per call; one fixed `num_ctx` (8192) so Ollama never reloads the model between calls; `keep_alive` 30 minutes; `profile(model:)` for the fit meter.
 
-**Crawler motion**: `CrawlerLegController.swift` (tetrapod gait, IK knees, dash scuttle above 600 pt/s), `CrawlerNavigator.swift` (curious, coverage-aware wandering instead of row-by-row sweeps), `CrawlerController.swift` (take/release control, pause or stop without cancelling the conversation, travel-speed override, hunt "found" announcement), `CrawlerRenderer.swift` (draws IK knees, clamped feet, body bob, the neon creature and neon boxes around touched words).
+**Crawler motion**: `CrawlerLegController.swift` (tetrapod gait, IK knees, dash scuttle above 600 pt/s), `CrawlerNavigator.swift` (curious, coverage-aware wandering instead of row-by-row sweeps), `CrawlerController.swift` (take/release control, pause or stop without cancelling the conversation, travel-speed override, hunt "found" announcement), `CrawlerRenderer.swift` (draws IK knees, clamped feet, body bob, the three creature looks and glowing boxes around touched words).
 
 No new app-target files were added, so `Atlas.xcodeproj` needs no changes. New AtlasCore files are picked up by the Swift package automatically.
 
@@ -33,12 +33,12 @@ No new app-target files were added, so `Atlas.xcodeproj` needs no changes. New A
 
 - **61 AtlasCore unit tests pass** (Swift 6.0.3 on Linux): `PageQueryTests`, `CompanionParserTests` (including the user's own example requests), `HighlightStyleTests`, `CompanionPlanTests`, `CompanionPlannerTests` (scripted model: one call, repair, rejected steps, semantic filter, fit scoring), `CrawlerTests`, `CrawlerMotionTests`, `CrawlerPageTests`, `CrawlerCommandTests`. Linux has no NaturalLanguage framework, so a small stand-in tagger was used; part-of-speech and name results on macOS come from Apple's tagger and may differ slightly.
 - `OllamaProvider.swift` type-checks (against a shim for `URLSession.AsyncBytes`).
-- `CrawlerConversation.swift`, `CrawlerController.swift`, `CrawlerIntelligence.swift` and `DocumentGeometryScript.swift` compile without errors or warnings under complete strict-concurrency checking, against stand-ins for WebKit, AppKit, `BrowserModel` and `CrawlerRenderer`.
+- `CrawlerConversation.swift`, `CrawlerController.swift`, `CrawlerIntelligence.swift`, `DocumentGeometryScript.swift` and `CrawlerRenderer.swift` compile without errors or warnings under complete strict-concurrency checking, against stand-ins for WebKit, AppKit, CoreGraphics and `BrowserModel`.
 - **End to end in Chromium**: the real geometry script built a page map of a Wikipedia-style page; the Swift engine ran the user's requests on it; the script painted the results. Highlights covered exactly the matched words, survived a resize and an image reflow, a text change was detected as stale, single-layer removal worked, and unsafe colors and layer names were rejected.
 
 ## Not verified yet (needs the Mac)
 
-- Compiling the SwiftUI and AppKit files: `CrawlerControls.swift`, `CrawlerRenderer.swift`, `IntelligenceView.swift`, `IntelligenceModel.swift`, `PackageLibraryModel.swift`.
+- Compiling the SwiftUI and AppKit files: `CrawlerControls.swift`, `IntelligenceView.swift`, `IntelligenceModel.swift`, `PackageLibraryModel.swift`, and `CrawlerRenderer.swift` against the real AppKit and CoreGraphics.
 - Real WebKit (CSS Custom Highlight API, `Highlight.priority`, `text-decoration` in `::highlight`), Apple's NaturalLanguage tagging, and live Ollama calls with a JSON-schema `format`.
 - `Tests/BrowserSmoke/BrowserSmoke.swift` and `Tests/LayoutSmoke/LayoutSmoke.swift` (rewritten or adjusted, never compiled).
 - How the new gait and wandering look, and how fast the companion feels with `llama3.1`.
@@ -61,7 +61,7 @@ Scripts/test-browser.sh
 ATLAS_BUILD_DIR=/tmp/AtlasStage2Build Scripts/test-layout.sh
 ```
 
-Places most likely to need a compile fix, in order: `CrawlerControls.swift` (new `HighlightLegend`, `FitBadge`, `Color(hex:)`), `IntelligenceView.swift` (`CompanionFitRow`), `CrawlerRenderer.swift` (knee, foot, neon creature and touch-box drawing), `BrowserSmoke.swift`.
+Places most likely to need a compile fix, in order: `CrawlerControls.swift` (new `HighlightLegend`, `FitBadge`, `Color(hex:)`), `IntelligenceView.swift` (`CompanionFitRow`), `CrawlerRenderer.swift` (knee, foot, creature-look and touch-box drawing; it was type-checked here against stand-ins for AppKit and CoreGraphics), `BrowserSmoke.swift`.
 
 ## Manual acceptance on the Mac
 
@@ -76,7 +76,7 @@ With `llama3.1:latest` selected in Ask (the badge should read **Medium?** until 
    - `go to the second longest word` · `take me to the Early life section` · `go to the bottom`
    - Resize the window: highlights must stay. Click × on a legend row, then `clear highlights`.
    - Model requests: `paint every word to do with music in purple`, `what is this article about?`, `open the article on Paris and count its links`, `hunt for the phrase "…"`, `wander`, `faster`, `stop`.
-3. Watch the spider: no legs snapping across the page, knees bending outward, a quick scuttle on long trips, curious wandering rather than rows. It should look neon (cyan legs, pink joints, dark body with a cyan eye), and each word or link under a planted foot should get a glowing neon box that fades into a short trail as it walks (Touch glow and Neon in the manual tools).
+3. Watch the spider: no legs snapping across the page, knees bending outward, a quick scuttle on long trips, curious wandering rather than rows. By default it should look like a constellation in a dark crystal (white lattice, glass spheres, orange core, haloed head, a slanting beam), and each word or link under a planted foot should get a glowing box with orange-glowing letters that fades into a short trail as it walks. Try each **Look** (Constellation, Neon, Mechanical) and **Touch glow** in the manual tools; the look should be remembered after relaunching.
 
 ## Known limits and ideas for next steps
 

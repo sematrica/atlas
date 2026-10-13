@@ -193,9 +193,16 @@ enum DocumentGeometryScript {
       function removeLayer(layer){for(const highlightName of layers.get(layer)||[])CSS.highlights?.delete(highlightName);layers.delete(layer);}
       function clearLayers(){for(const layer of [...layers.keys()])removeLayer(layer);CSS.highlights?.delete('atlas-found');}
 
-      // Touch glow: words under the spider's planted feet glow neon cyan and fade after
-      // the foot lifts. The native overlay draws the boxes; the page makes the text glow.
-      [0,1,2,3].forEach(i=>sheet.insertRule(`::highlight(atlas-touch-${i}){text-shadow:0 0 ${2+i*2}px rgba(64,236,255,${0.3+i*0.22}),0 0 ${1+i}px rgba(64,236,255,${0.25+i*0.2})}`,sheet.cssRules.length));
+      // Touch glow: words under the spider's planted feet glow in the creature's color and fade
+      // after the foot lifts. The native overlay draws the boxes; the page makes the text glow.
+      const touchStyle=document.createElement('style');document.head.appendChild(touchStyle);
+      let touchTint='';
+      function setTouchTint(tint){
+        if(typeof tint!=='string'||!/^\d{1,3},\d{1,3},\d{1,3}$/.test(tint)||tint===touchTint)return;
+        touchTint=tint;
+        touchStyle.textContent=[0,1,2,3].map(i=>`::highlight(atlas-touch-${i}){text-shadow:0 0 ${2+i*2}px rgba(${tint},${0.3+i*0.22}),0 0 ${1+i}px rgba(${tint},${0.25+i*0.2})}`).join('\n');
+      }
+      setTouchTint('64,236,255');
       const touched=new Map();let touchFrame=0;
       const wordCharacter=c=>/[\p{L}\p{N}'’\-.]/u.test(c);
       // The word under a viewport point, if the point is on it (not on whitespace or margin).
@@ -219,8 +226,9 @@ enum DocumentGeometryScript {
         const range=document.createRange();range.setStart(node,start);range.setEnd(node,end);
         return {range,key:identify(node)+':'+start};
       }
-      function touch(points){
+      function touch(points,tint){
         if(!CSS.highlights)return 0;
+        setTouchTint(tint);
         const now=performance.now();let found=0;
         for(const p of points||[]) {
           const x=p.x-scrollX,y=p.y-scrollY;if(x<0||y<0||x>innerWidth||y>innerHeight)continue;
