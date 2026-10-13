@@ -193,7 +193,68 @@ enum DocumentGeometryScript {
       function removeLayer(layer){for(const highlightName of layers.get(layer)||[])CSS.highlights?.delete(highlightName);layers.delete(layer);}
       function clearLayers(){for(const layer of [...layers.keys()])removeLayer(layer);CSS.highlights?.delete('atlas-found');}
 
-      window.atlasTerrain={observe,metrics,highlight,pageMap,pageResolve,paintLayer,removeLayer,clearLayers,clear:()=>CSS.highlights?.delete('atlas-found'),
+      // Touch glow: letters under the spider's planted feet glow, then fade after the
+      // foot lifts, leaving a short trail. Letters under the body glow softly.
+      const glow=['rgba(255,196,92,0.16)','rgba(255,196,92,0.30)','rgba(255,190,80,0.46)','rgba(255,184,64,0.66)'];
+      glow.forEach((bg,i)=>sheet.insertRule(`::highlight(atlas-touch-${i}){background-color:${bg};text-shadow:0 0 ${3+i*2}px rgba(255,176,48,${0.35+i*0.2})}`,sheet.cssRules.length));
+      sheet.insertRule('::highlight(atlas-touch-body){background-color:rgba(255,206,120,0.22)}',sheet.cssRules.length);
+      const touched=new Map();let touchFrame=0;
+      // The single character under a viewport point, if the point is on it (not on whitespace or margin).
+      function characterAt(x,y){
+        const caret=document.caretRangeFromPoint?document.caretRangeFromPoint(x,y):null;
+        if(!caret||caret.startContainer.nodeType!==Node.TEXT_NODE)return null;
+        const node=caret.startContainer,text=node.data;
+        if(node.parentElement?.closest('script,style,noscript,[hidden]'))return null;
+        let best=null;
+        for(const offset of [caret.startOffset-1,caret.startOffset]){
+          if(offset<0||offset>=text.length||/\s/.test(text[offset]))continue;
+          let start=offset,end=offset+1;const code=text.charCodeAt(offset);
+          if(code>=0xD800&&code<=0xDBFF&&end<text.length)end++;
+          if(code>=0xDC00&&code<=0xDFFF&&start>0)start--;
+          const r=document.createRange();r.setStart(node,start);r.setEnd(node,end);
+          const b=r.getBoundingClientRect();if(!b.width||!b.height)continue;
+          const d=Math.hypot(Math.max(b.left-x,0,x-b.right),Math.max(b.top-y,0,y-b.bottom));
+          if(d<=3&&(!best||d<best.d))best={range:r,d,key:identify(node)+':'+start};
+        }
+        return best;
+      }
+      function touch(points){
+        if(!CSS.highlights)return 0;
+        const now=performance.now();let found=0;
+        for(const p of points||[]) {
+          const x=p.x-scrollX,y=p.y-scrollY;if(x<0||y<0||x>innerWidth||y>innerHeight)continue;
+          const samples=p.body?[[0,0]]:[[0,0],[-3,0],[3,0],[0,-3]];
+          for(const [dx,dy] of samples) {
+            const hit=characterAt(x+dx,y+dy);if(!hit)continue;
+            const previous=touched.get(hit.key);
+            touched.set(hit.key,{range:hit.range,time:now,body:!!p.body&&!(previous&&!previous.body&&now-previous.time<1400)});found++;
+          }
+        }
+        if(!touchFrame)touchFrame=requestAnimationFrame(fadeTouch);
+        return found;
+      }
+      let lastFade=0;
+      function fadeTouch(now){
+        touchFrame=0;
+        if(now-lastFade>=60) {
+          lastFade=now;
+          const levels=[new Highlight(),new Highlight(),new Highlight(),new Highlight()],body=new Highlight();
+          for(const [key,entry] of touched) {
+            const age=now-entry.time;
+            if(!entry.range.startContainer.isConnected){touched.delete(key);continue;}
+            if(entry.body){if(age>220)touched.delete(key);else body.add(entry.range);continue;}
+            const level=age<180?3:age<520?2:age<900?1:age<1400?0:-1;
+            if(level<0){touched.delete(key);continue;}
+            levels[level].add(entry.range);
+          }
+          levels.forEach((h,i)=>{h.priority=1000+i;CSS.highlights.set('atlas-touch-'+i,h);});
+          body.priority=999;CSS.highlights.set('atlas-touch-body',body);
+        }
+        if(touched.size)touchFrame=requestAnimationFrame(fadeTouch);
+      }
+      function clearTouch(){touched.clear();for(const name of ['atlas-touch-0','atlas-touch-1','atlas-touch-2','atlas-touch-3','atlas-touch-body'])CSS.highlights?.delete(name);}
+
+      window.atlasTerrain={observe,metrics,highlight,pageMap,pageResolve,paintLayer,removeLayer,clearLayers,touch,clearTouch,clear:()=>CSS.highlights?.delete('atlas-found'),
         follow:(x,y,smooth)=>{const margin=100;let dx=0,dy=0;if(y-scrollY<margin)dy=y-scrollY-margin;else if(y-scrollY>innerHeight-margin)dy=y-scrollY-innerHeight+margin;
           if(x-scrollX<60)dx=x-scrollX-60;else if(x-scrollX>innerWidth-60)dx=x-scrollX-innerWidth+60;
           if(Math.abs(dx)>2||Math.abs(dy)>2)scrollBy({left:dx,top:dy,behavior:smooth?'smooth':'instant'});}};

@@ -10,6 +10,8 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
     var target=""
     var autoFollow=true
     var debug=false
+    /// Letters under the spider's feet and body glow, and fade after it moves on.
+    var touchGlow=true {didSet {if !touchGlow {webView?.evaluateJavaScript("window.atlasTerrain?.clearTouch()",in:nil,in:.defaultClient){_ in}}}}
     var radius=140.0
     var ready=false
     var status:CrawlerBehavior = .idle
@@ -65,6 +67,9 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
                 do {
                     try await self.refreshPerception()
                     guard self.epoch == token,!Task.isCancelled else {return}
+                    if self.touchGlow {
+                        _ = try? await webView.callAsyncJavaScript("return window.atlasTerrain?.touch(points)",arguments:["points":self.touchPoints()],in:nil,contentWorld:.defaultClient)
+                    }
                     if self.autoFollow && ![.paused,.found,.idle].contains(self.status) {
                         _ = try await webView.callAsyncJavaScript("window.atlasTerrain?.follow(x,y,smooth)",arguments:["x":self.agent.state.position.x,"y":self.agent.state.position.y,"smooth":!self.reduceMotion],in:nil,contentWorld:.defaultClient)
                     }
@@ -77,6 +82,17 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
             }
         }
         if semantic {intelligence.begin(reset:!preserveExpedition)}
+    }
+    /// Planted feet, plus a few points along the body, in document coordinates.
+    private func touchPoints()->[[String:Any]] {
+        let body=agent.state.position
+        var points:[[String:Any]]=legs.legs.indices.filter {!legs.legs[$0].isStepping}.map {
+            let foot=legs.drawnFoot($0,body:body)
+            return ["x":foot.x,"y":foot.y]
+        }
+        let dx=cos(legs.heading)*8,dy=sin(legs.heading)*8
+        for step in [-1.0,0,1] {points.append(["x":body.x+dx*step,"y":body.y+dy*step,"body":true])}
+        return points
     }
     func inspectFor(_ seconds:Double) {guard active,status != .paused else {return};agent.inspect(for:seconds);status=agent.state.behavior}
     func setGuidanceSuppressed(_ value:Bool) {agent.suppressHunt(value)}

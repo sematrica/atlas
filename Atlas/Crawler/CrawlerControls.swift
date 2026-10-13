@@ -25,6 +25,7 @@ struct CrawlerControls:View {
                 }
                 Spacer()
                 Toggle("Auto Follow",isOn:$crawler.autoFollow).toggleStyle(.checkbox)
+                Toggle("Touch glow",isOn:$crawler.touchGlow).toggleStyle(.checkbox).help("Letters under the spider's feet glow")
                 Toggle("Debug",isOn:$crawler.debug).toggleStyle(.checkbox)
             }.font(.caption)
 

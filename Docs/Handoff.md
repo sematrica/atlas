@@ -76,7 +76,7 @@ With `llama3.1:latest` selected in Ask (the badge should read **Medium?** until 
    - `go to the second longest word` · `take me to the Early life section` · `go to the bottom`
    - Resize the window: highlights must stay. Click × on a legend row, then `clear highlights`.
    - Model requests: `paint every word to do with music in purple`, `what is this article about?`, `open the article on Paris and count its links`, `hunt for the phrase "…"`, `wander`, `faster`, `stop`.
-3. Watch the spider: no legs snapping across the page, knees bending outward, a quick scuttle on long trips, curious wandering rather than rows.
+3. Watch the spider: no legs snapping across the page, knees bending outward, a quick scuttle on long trips, curious wandering rather than rows. Letters under its feet should glow amber and fade into a short trail as it walks (Touch glow in the manual tools).
 
 ## Known limits and ideas for next steps
 
