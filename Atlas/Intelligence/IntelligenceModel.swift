@@ -88,8 +88,8 @@ final class IntelligenceModel {
     func cancelFitTest() {fitTask?.cancel();fitTask=nil;fitTesting=false}
     private func publishFit() {
         let badge:ModelFitBadge?
-        if let report=fitReport {badge=.init(rating:report.rating,summary:report.summary,measured:true)}
-        else if let estimate=fitEstimate {badge=.init(rating:estimate.rating,summary:estimate.summary,measured:false)}
+        if let report=fitReport {badge = .init(rating:report.rating,summary:report.summary,measured:true)}
+        else if let estimate=fitEstimate {badge = .init(rating:estimate.rating,summary:estimate.summary,measured:false)}
         else {badge=nil}
         onFitChange?(badge)
     }
