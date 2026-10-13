@@ -49,18 +49,9 @@ final class CrawlerRenderer:NSView {
         if gap>7 {x=target.x-dx/gap*7;y=target.y-dy/gap*7}
         visualPosition=DocumentPosition(x:x,y:y)
     }
+    /// Knees come from the leg controller's inverse kinematics; a swinging leg lifts its knee.
     private func animatedKnee(_ i:Int,body:DocumentPosition)->DocumentPosition {
-        let knee=crawler.legs.knee(i,body:body)
-        guard !crawler.reduceMotion else {return knee}
-        let leg=crawler.legs.legs[i]
-        let lift=leg.isStepping ? sin(leg.phase * .pi)*4 : 0
-        let side=i<4 ? -1.0 : 1.0,angle=crawler.legs.heading
-        return knee.moved(-sin(angle)*side*lift,cos(angle)*side*lift)
-    }
-    private func isWithinVisibleReach(_ i:Int,body:DocumentPosition)->Bool {
-        // A restricted route can leave an old permitted foothold far behind. Keep its
-        // logical anchor for route validation without drawing a limb across the page.
-        crawler.legs.legs[i].foot.distance(to:body)<=100
+        crawler.legs.knee(i,body:body)
     }
     override func draw(_ dirtyRect:NSRect) {
         guard crawler.active,let context=NSGraphicsContext.current?.cgContext else {return}
@@ -95,8 +86,7 @@ final class CrawlerRenderer:NSView {
             context.setStrokeColor((halo ? NSColor.white.withAlphaComponent(0.8) : color).cgColor)
             context.setLineWidth(halo ? 3.3 : 1.65);context.setLineCap(.round);context.setLineJoin(.miter)
             for i in crawler.legs.legs.indices {
-                if !isWithinVisibleReach(i,body:p) {continue}
-                let a=crawler.legs.attachment(i,body:p),k=animatedKnee(i,body:p),foot=crawler.legs.legs[i].foot
+                let a=crawler.legs.attachment(i,body:p),k=animatedKnee(i,body:p),foot=crawler.legs.drawnFoot(i,body:p)
                 context.move(to:CGPoint(x:a.x,y:a.y))
                 context.addLine(to:CGPoint(x:p.x+(k.x-p.x)*spawn,y:p.y+(k.y-p.y)*spawn))
                 context.addLine(to:CGPoint(x:p.x+(foot.x-p.x)*spawn,y:p.y+(foot.y-p.y)*spawn));context.strokePath()
@@ -108,7 +98,6 @@ final class CrawlerRenderer:NSView {
         // Exposed pivot bearings and short actuator rods make each limb read as a mechanism.
         let accent=state.behavior == .found ? NSColor.systemGreen : NSColor(calibratedRed:0.91,green:0.76,blue:0.47,alpha:1)
         for i in crawler.legs.legs.indices {
-            if !isWithinVisibleReach(i,body:p) {continue}
             let a=crawler.legs.attachment(i,body:p),raw=animatedKnee(i,body:p)
             let k=DocumentPosition(x:p.x+(raw.x-p.x)*spawn,y:p.y+(raw.y-p.y)*spawn)
             context.setStrokeColor(NSColor(calibratedWhite:0.65,alpha:1).cgColor);context.setLineWidth(0.7)
@@ -116,16 +105,18 @@ final class CrawlerRenderer:NSView {
             context.setFillColor(color.cgColor);context.setStrokeColor(NSColor(calibratedWhite:0.85,alpha:1).cgColor)
             context.fillEllipse(in:CGRect(x:k.x-2,y:k.y-2,width:4,height:4))
             context.strokeEllipse(in:CGRect(x:k.x-2,y:k.y-2,width:4,height:4))
-            let foot=crawler.legs.legs[i].foot
+            // A lifted foot is drawn slightly smaller, as if farther from the page.
+            let foot=crawler.legs.drawnFoot(i,body:p),size=3.2-crawler.legs.legs[i].lift*1.2
             context.setFillColor(accent.withAlphaComponent(0.9).cgColor)
-            context.fillEllipse(in:CGRect(x:foot.x-1.6,y:foot.y-1.6,width:3.2,height:3.2))
+            context.fillEllipse(in:CGRect(x:foot.x-size/2,y:foot.y-size/2,width:size,height:size))
         }
         let stepBalance=crawler.reduceMotion ? 0 : crawler.legs.legs.enumerated().reduce(0.0) { sum,entry in
-            let leg=entry.element
-            return sum+(leg.isStepping ? sin(leg.phase * .pi)*(entry.offset.isMultiple(of:2) ? 1 : -1) : 0)
+            sum+entry.element.lift*(entry.offset<4 ? 1 : -1)
         }
-        context.translateBy(x:p.x,y:p.y);context.rotate(by:crawler.legs.heading+stepBalance*0.008)
-        // The chassis tips slightly with each alternating step, then settles when planted.
+        // The chassis rocks toward the planted side and bobs slightly with each step.
+        let lifted=crawler.legs.legs.reduce(0.0) {$0+$1.lift}
+        let bob=crawler.reduceMotion ? 1.0 : 1+0.025*lifted/4
+        context.translateBy(x:p.x,y:p.y);context.rotate(by:crawler.legs.heading+stepBalance*0.02);context.scaleBy(x:bob,y:bob)
         context.setFillColor(color.cgColor);context.setStrokeColor(NSColor(calibratedWhite:0.85,alpha:1).cgColor);context.setLineWidth(0.9)
         context.move(to:CGPoint(x:-12,y:-3));context.addLine(to:CGPoint(x:-7,y:-7))
         context.addLine(to:CGPoint(x:5,y:-6));context.addLine(to:CGPoint(x:11,y:-3))
@@ -133,7 +124,7 @@ final class CrawlerRenderer:NSView {
         context.addLine(to:CGPoint(x:-7,y:7));context.addLine(to:CGPoint(x:-12,y:3));context.closePath();context.drawPath(using:.fillStroke)
         context.setStrokeColor(accent.withAlphaComponent(0.8).cgColor);context.setLineWidth(0.65)
         context.stroke(CGRect(x:-6,y:-3,width:9,height:6))
-        context.setFillColor(accent.withAlphaComponent(crawler.conversation.companionBusy ? 0.85 : 0.35).cgColor)
+        context.setFillColor(accent.withAlphaComponent(crawler.conversation.busy ? 0.85 : 0.35).cgColor)
         context.fillEllipse(in:CGRect(x:-4,y:-2,width:4,height:4))
         context.move(to:CGPoint(x:-10,y:0));context.addLine(to:CGPoint(x:-6,y:0));context.strokePath()
         context.setFillColor(accent.cgColor)

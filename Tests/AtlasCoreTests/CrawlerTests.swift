@@ -64,19 +64,28 @@ final class CrawlerTests:XCTestCase {
         agent.stop();XCTAssertEqual(agent.state.behavior,.idle);XCTAssertNil(agent.observation)
     }
     func testCoverageVisitsEntireDocumentWithoutRandomLuck() {
-        var navigator=CrawlerNavigator();var p=DocumentPosition(x:20,y:20);var visited:[DocumentPosition]=[]
-        for _ in 0..<250 {let observation=sample([],center:p);p=navigator.goal(position:p,observation:observation);visited.append(p)}
-        XCTAssertGreaterThan(navigator.laps,0)
+        var navigator=CrawlerNavigator();var p=DocumentPosition(x:20,y:20);var visited:[DocumentPosition]=[p]
+        for _ in 0..<300 {let observation=sample([],center:p);p=navigator.goal(position:p,observation:observation);visited.append(p)}
         for y in stride(from:20.0,through:1180,by:100) {
-            for x in stride(from:20.0,through:780,by:100) {XCTAssertTrue(visited.contains {$0.distance(to:.init(x:x,y:y))<140})}
+            for x in stride(from:20.0,through:780,by:100) {XCTAssertTrue(visited.contains {$0.distance(to:.init(x:x,y:y))<160},"(\(x), \(y)) was never approached")}
         }
+        XCTAssertGreaterThan(navigator.laps+Int(navigator.coverage*10),0)
+    }
+    func testWanderingIsNotARowByRowSweep() {
+        var navigator=CrawlerNavigator(seed:7);var p=DocumentPosition(x:400,y:600);var directions=Set<Int>()
+        for _ in 0..<40 {
+            let next=navigator.goal(position:p,observation:sample([],center:p))
+            directions.insert(Int((atan2(next.y-p.y,next.x-p.x)+Double.pi)/(Double.pi/4)))
+            p=next
+        }
+        XCTAssertGreaterThan(directions.count,4,"Wandering should head in many directions, not only left, right and down")
     }
     func testAlternatingGaitKeepsPlantedFeetStable() {
         var gait=CrawlerLegController();gait.reset(at:.init(x:100,y:100))
         let before=gait.legs.map(\.foot)
         gait.advance(body:.init(x:118,y:100),velocity:.init(x:40,y:0),anchors:[],dt:0.016,reduceMotion:false)
         XCTAssertGreaterThan(gait.legs.filter(\.isStepping).count,0)
-        XCTAssertLessThanOrEqual(gait.legs.filter(\.isStepping).count,2)
+        XCTAssertLessThanOrEqual(gait.legs.filter(\.isStepping).count,4,"One tetrapod group swings at a time")
         for i in 0..<8 where !gait.legs[i].isStepping {XCTAssertEqual(gait.legs[i].foot,before[i])}
     }
     func testFastGaitOverlapsDiagonalStepsWithoutSlidingSupportFeet() {
@@ -127,6 +136,30 @@ final class CrawlerTests:XCTestCase {
             for i in gait.legs.indices {
                 XCTAssertLessThan(gait.legs[i].foot.distance(to:previousFeet[i]),42,"A normal tour must not need a visual foot reset")
             }
+        }
+    }
+    func testDashSpeedsNeverSnapAFootAcrossThePage() {
+        for speed in [270.0,540,700,850,1100] {
+            var gait=CrawlerLegController();gait.reset(at:.init(x:100,y:100))
+            for frame in 0..<240 {
+                let old=gait.legs.map(\.foot)
+                let t=Double(frame)/60
+                let turning=frame>=120
+                let body=turning ? DocumentPosition(x:100+2*speed,y:100+(t-2)*speed) : DocumentPosition(x:100+t*speed,y:100)
+                gait.advance(body:body,velocity:turning ? .init(x:0,y:speed) : .init(x:speed,y:0),anchors:[],dt:1.0/60,reduceMotion:false)
+                for i in 0..<8 {XCTAssertLessThan(gait.legs[i].foot.distance(to:old[i]),45,"speed \(speed): foot \(i) jumped")}
+                for i in 0..<8 {XCTAssertLessThan(gait.knee(i,body:body).distance(to:body),CrawlerLegController.maximumReach)}
+            }
+        }
+    }
+    func testKneesBendOutwardWithFixedSegments() {
+        var gait=CrawlerLegController();gait.reset(at:.init(x:200,y:200))
+        let body=DocumentPosition(x:200,y:200)
+        for i in 0..<8 {
+            let attachment=gait.attachment(i,body:body),knee=gait.knee(i,body:body),foot=gait.drawnFoot(i,body:body)
+            XCTAssertEqual(attachment.distance(to:knee),CrawlerLegController.segment,accuracy:0.5)
+            XCTAssertEqual(knee.distance(to:foot),CrawlerLegController.segment,accuracy:0.5)
+            XCTAssertGreaterThan(knee.distance(to:body),attachment.distance(to:body),"The knee sits outside the body")
         }
     }
     func testGaitRecoversFromAJumpWithoutPageSpanningLegs() {

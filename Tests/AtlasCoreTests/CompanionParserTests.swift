@@ -1,0 +1,177 @@
+import XCTest
+@testable import AtlasCore
+
+final class CompanionParserTests:XCTestCase {
+    private func step(_ request:String,file:StaticString=#filePath,line:UInt=#line)->CompanionStep? {
+        let plan=CompanionLocalParser.parse(request)
+        XCTAssertEqual(plan?.steps.count,1,"“\(request)” should be understood locally",file:file,line:line)
+        XCTAssertEqual(plan?.local,true,file:file,line:line)
+        return plan?.steps.first
+    }
+
+    func testTheUsersOwnExamples() {
+        let a=step("find me all the words that start with a and ends with r")
+        XCTAssertEqual(a?.action,"highlight");XCTAssertEqual(a?.query?.unit,"word")
+        XCTAssertEqual(a?.query?.startsWith,"a");XCTAssertEqual(a?.query?.endsWith,"r")
+
+        let b=step("find all adjective that ends with w and highlight it with green")
+        XCTAssertEqual(b?.action,"highlight");XCTAssertEqual(b?.query?.partOfSpeech,"adjective")
+        XCTAssertEqual(b?.query?.endsWith,"w");XCTAssertEqual(HighlightStyle.parse(b?.color)?.colors,["#008000"])
+
+        let c=step("How many dots are in this article?")
+        XCTAssertEqual(c?.action,"count");XCTAssertEqual(c?.query?.unit,"character");XCTAssertEqual(c?.query?.equals,".")
+
+        let d=step("how many links in this article")
+        XCTAssertEqual(d?.action,"count");XCTAssertEqual(d?.query?.unit,"link")
+
+        let e=step("how many capital letters in this article")
+        XCTAssertEqual(e?.action,"count");XCTAssertEqual(e?.query?.unit,"letter");XCTAssertEqual(e?.query?.letterCase,"uppercase")
+
+        let f=step("highlight the verbs half green half yellow")
+        XCTAssertEqual(f?.query?.partOfSpeech,"verb");XCTAssertEqual(HighlightStyle.parse(f?.color)?.mode,.split)
+    }
+
+    func testCountingVariants() {
+        XCTAssertEqual(step("count the commas")?.query?.equals,",")
+        XCTAssertEqual(step("How many periods does this page have?")?.query?.equals,".")
+        XCTAssertEqual(step("what's the number of question marks")?.query?.equals,"?")
+        let sentences=step("how many sentences are in the Career section")
+        XCTAssertEqual(sentences?.query?.unit,"sentence");XCTAssertEqual(sentences?.query?.section,"career")
+        let long=step("how many words have more than 10 letters")
+        XCTAssertEqual(long?.query?.minLength,11)
+        XCTAssertEqual(step("how many 5-letter words are there")?.query?.length,5)
+        XCTAssertEqual(step("how many unique words")?.query?.distinct,true)
+        XCTAssertEqual(step("count all the vowels in the introduction")?.query?.section,"introduction")
+        XCTAssertEqual(step("how many sentences have more than 30 words")?.query?.minWords,31)
+        XCTAssertEqual(step("how many images")?.query?.unit,"image")
+        XCTAssertEqual(step("how many sections are there")?.query?.unit,"heading")
+    }
+
+    func testHighlightingVariants() {
+        let blue=step("Please highlight all nouns in light blue")
+        XCTAssertEqual(blue?.action,"highlight");XCTAssertEqual(blue?.query?.partOfSpeech,"noun")
+        XCTAssertEqual(HighlightStyle.parse(blue?.color)?.colors,["#add8e6"])
+        let negated=step("highlight words that don't start with s")
+        XCTAssertEqual(negated?.query?.notStartsWith,"s")
+        let either=step("mark words starting with a or e in red")
+        XCTAssertEqual(either?.query?.startsWith,"a|e")
+        let counted=step("count the adjectives and highlight them in alternating red and blue")
+        XCTAssertEqual(counted?.action,"highlight");XCTAssertEqual(HighlightStyle.parse(counted?.color)?.mode,.alternate)
+        let quoted=step("find words containing \"th\"")
+        XCTAssertEqual(quoted?.query?.contains,"th")
+        let letter=step("highlight words with the letter z")
+        XCTAssertEqual(letter?.query?.contains,"z")
+        let excluded=step("highlight the verbs outside the References section")
+        XCTAssertEqual(excluded?.query?.excludeSections,["references"])
+        XCTAssertEqual(step("show me all the people")?.query?.entity,"person")
+        XCTAssertEqual(step("where are the adjectives")?.action,"highlight")
+    }
+
+    func testSelectionsAndMovement() {
+        let second=step("go to the second longest word")
+        XCTAssertEqual(second?.action,"goto");XCTAssertEqual(second?.query?.order,"longest");XCTAssertEqual(second?.query?.rank,2)
+        let longest=step("what is the longest word?")
+        XCTAssertEqual(longest?.action,"list");XCTAssertEqual(longest?.query?.order,"longest")
+        let five=step("highlight the 5 longest words in red")
+        XCTAssertEqual(five?.query?.limit,5);XCTAssertEqual(five?.action,"highlight")
+        XCTAssertEqual(step("take me to the first sentence")?.query?.order,"first")
+        XCTAssertEqual(step("what's the most common word")?.query?.order,"frequent")
+        let first3=step("list the first 3 sentences")
+        XCTAssertEqual(first3?.query?.order,"first");XCTAssertEqual(first3?.query?.limit,3)
+        let place=step("take me to the Early life section")
+        XCTAssertEqual(place?.action,"go");XCTAssertEqual(place?.place,"early life")
+        XCTAssertEqual(step("go to the top")?.place,"top")
+    }
+
+    func testControlCommands() {
+        XCTAssertEqual(step("stop")?.action,"stop")
+        XCTAssertEqual(step("Faster please")?.speed,"faster")
+        XCTAssertEqual(step("slow down")?.speed,"slower")
+        XCTAssertEqual(step("clear all highlights")?.action,"clear")
+        XCTAssertEqual(step("stay in this article")?.rule,"stay")
+        XCTAssertEqual(step("go back")?.action,"back")
+        XCTAssertEqual(step("wander around")?.action,"wander")
+    }
+
+    func testAnythingUnclearGoesToTheModel() {
+        for request in ["What do you think of this article?","highlight words related to music","open the article about Paris",
+                        "how many words except the","find words of French origin","Hello!","highlight the green ones",
+                        "how many dots in this letter","go to Paris","find the sentence about his childhood",
+                        "highlight verbs and nouns","count words in history"] {
+            XCTAssertNil(CompanionLocalParser.parse(request),"“\(request)” must go to the model")
+        }
+    }
+}
+
+final class HighlightStyleTests:XCTestCase {
+    func testColorPhrases() throws {
+        XCTAssertEqual(HighlightStyle.parse("green")?.colors,["#008000"])
+        XCTAssertEqual(HighlightStyle.parse("in dark green")?.colors,["#006400"])
+        XCTAssertEqual(HighlightStyle.parse("#f80")?.colors,["#ff8800"])
+        let split=try XCTUnwrap(HighlightStyle.parse("half green half yellow"))
+        XCTAssertEqual(split.mode,.split);XCTAssertEqual(split.colors.count,2)
+        XCTAssertEqual(HighlightStyle.parse("half of them green and half yellow")?.mode,.groups)
+        XCTAssertEqual(HighlightStyle.parse("alternate red and blue")?.mode,.alternate)
+        XCTAssertEqual(HighlightStyle.parse("a gradient from blue to purple")?.mode,.gradient)
+        XCTAssertEqual(HighlightStyle.parse("rainbow")?.mode,.gradient)
+        XCTAssertEqual(HighlightStyle.parse("underline them in red")?.underline,true)
+        XCTAssertEqual(HighlightStyle.parse("make the text red")?.textOnly,true)
+        XCTAssertNil(HighlightStyle.parse("nicely"))
+        XCTAssertTrue(HighlightStyle.recognizes("in half green and half yellow"))
+        XCTAssertFalse(HighlightStyle.recognizes("in the history section"))
+        XCTAssertEqual(HighlightStyle.ink(for:"#0000ff"),"#ffffff")
+        XCTAssertEqual(HighlightStyle.ink(for:"#ffff00"),"#111111")
+    }
+
+    func testPaintingSplitsOnCharacterBoundaries() {
+        let rect=TerrainRect(x:0,y:0,width:10,height:10)
+        let matches=[PageMatch(range:.init(id:"a",start:4,end:10,text:"yellow"),elementID:nil,text:"yellow",rect:rect,order:0),
+                     PageMatch(range:.init(id:"a",start:20,end:23,text:"new"),elementID:nil,text:"new",rect:rect,order:1),
+                     PageMatch(range:nil,elementID:"link",text:"Paris",rect:rect,order:2)]
+        let split=HighlightStyle.parse("half green half yellow")!.paints(for:matches)
+        XCTAssertEqual(split.filter {$0.id == "a"}.map {[$0.start!,$0.end!,$0.color]},[[4,7,0],[7,10,1],[20,21,0],[21,23,1]])
+        XCTAssertEqual(split.last,HighlightPaint(id:"link",start:nil,end:nil,color:0))
+        let alternate=HighlightStyle.parse("alternate red and blue")!.paints(for:matches)
+        XCTAssertEqual(alternate.map(\.color),[0,1,0])
+        let groups=HighlightStyle.parse("half of them red and the rest blue")!.paints(for:matches)
+        XCTAssertEqual(groups.map(\.color),[0,0,1])
+        let emoji=HighlightStyle.pieces(.init(id:"a",start:0,end:5,text:"🕷️ab"),parts:2)
+        XCTAssertEqual(emoji.map {$0.end-$0.start}.reduce(0,+),5)
+        let gradient=HighlightStyle.parse("gradient from red to blue")!
+        XCTAssertEqual(gradient.palette.count,12);XCTAssertEqual(gradient.palette.first,"#ff0000");XCTAssertEqual(gradient.palette.last,"#0000ff")
+    }
+}
+
+final class CompanionPlanTests:XCTestCase {
+    func testDecodingNormalizesWhatSmallModelsProduce() throws {
+        let raw="""
+        Sure! ```json
+        {"steps":[{"action":"find","query":{"unit":"adjectives","endsWith":"w"},"color":"green"},{"action":"how many","query":{"unit":"Links"}},{"action":"answer"}],"reply":"On it."}
+        ```
+        """
+        let plan=try XCTUnwrap(CompanionPlan.decode(raw)).normalized()
+        XCTAssertEqual(plan.steps.map(\.action),["highlight","count"])
+        XCTAssertEqual(plan.steps[0].query?.partOfSpeech,"adjective")
+        XCTAssertEqual(plan.steps[1].query?.unit,"link")
+        XCTAssertTrue(plan.problems.isEmpty)
+        XCTAssertEqual(plan.reply,"On it.")
+    }
+
+    func testSingleStepObjectAndMissingFields() throws {
+        let plan=try XCTUnwrap(CompanionPlan.decode(#"{"steps":{"action":"faster"},"reply":""}"#)).normalized()
+        XCTAssertEqual(plan.steps.first?.action,"speed");XCTAssertEqual(plan.steps.first?.speed,"faster")
+        XCTAssertNil(plan.reply)
+        let invalid=try XCTUnwrap(CompanionPlan.decode(#"{"steps":[{"action":"executeJavaScript"},{"action":"go"}],"reply":"x"}"#)).normalized()
+        XCTAssertEqual(invalid.problems.count,2)
+    }
+
+    func testSchemaIsValidOrderedJSON() throws {
+        let json=CompanionPlan.schemaJSON
+        let object=try XCTUnwrap(JSONSerialization.jsonObject(with:Data(json.utf8)) as? [String:Any])
+        XCTAssertEqual(object["type"] as? String,"object")
+        // The model must choose an action before its details, and steps before the reply.
+        XCTAssertLessThan(json.range(of:"\"steps\"")!.lowerBound,json.range(of:"\"reply\"")!.lowerBound)
+        XCTAssertLessThan(json.range(of:"\"action\"")!.lowerBound,json.range(of:"\"query\"")!.lowerBound)
+        XCTAssertLessThan(json.range(of:"\"unit\"")!.lowerBound,json.range(of:"\"startsWith\"")!.lowerBound)
+    }
+}

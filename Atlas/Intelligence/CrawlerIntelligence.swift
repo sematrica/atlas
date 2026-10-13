@@ -2,12 +2,20 @@ import Foundation
 import Observation
 import AtlasCore
 
+/// How well the chosen chat model suits Atlas: an estimate, or a measured fit test.
+struct ModelFitBadge:Equatable {
+    let rating:FitRating
+    let summary:String
+    let measured:Bool
+}
+
 @MainActor @Observable
 final class CrawlerIntelligence {
     @ObservationIgnored weak var crawler:CrawlerController?
     @ObservationIgnored weak var browser:BrowserModel?
     @ObservationIgnored var provider:any LLMProvider=OllamaProvider()
     var model=""
+    var fit:ModelFitBadge?
     var mission=""
     var path:[CrawlerJourneyEntry]=[]
     var decision=""
@@ -116,32 +124,6 @@ final class CrawlerIntelligence {
         }
         return true
     }
-    func followUserLink(_ link:CrawlerTerrain) async throws -> Bool {
-        if path.isEmpty,let article=browser?.currentArticleID {path.append(.init(article:article,title:browser?.title ?? "Wikipedia"))}
-        return try await follow(link,userDirected:true)
-    }
-    func followPlanLink(_ link:CrawlerTerrain,excluding:Set<String>,expectedGeneration:UUID) async throws -> Bool {
-        guard crawler?.conversation.permitsSection(link) == true else {return false}
-        guard let base=browser?.webView?.url,let href=link.href,let url=URL(string:href,relativeTo:base)?.absoluteURL else {return false}
-        let path:String?
-        if url.scheme == "atlas",url.host == base.host {path=String(url.path.dropFirst())} else {path=OfflineURL.localWikipediaPath(url)}
-        guard let path,let provider=browser?.provider else {return false}
-        let info=try await provider.info(path:path)
-        try Task.checkCancellation()
-        guard crawler?.conversation.executionID == expectedGeneration,!excluding.contains(info.path) else {return false}
-        return try await followPlanArticle(info.path,expectedGeneration:expectedGeneration,excluding:excluding)
-    }
-    func followPlanArticle(_ path:String,expectedGeneration:UUID,excluding:Set<String>=[]) async throws -> Bool {
-        let requestToken=token
-        guard let crawler,crawler.conversation.executionID == expectedGeneration,crawler.active,crawler.status != .paused,crawler.conversation.rules.allowLinks,
-              crawler.conversation.rules.permits(path),let browser,let provider=browser.provider else {return false}
-        let info=try await provider.info(path:path)
-        try Task.checkCancellation()
-        guard token == requestToken,crawler.conversation.executionID == expectedGeneration,!excluding.contains(info.path),crawler.active,crawler.status != .paused,crawler.conversation.rules.allowLinks,
-              crawler.conversation.rules.permits(info.title+" "+info.path),info.mimeType.contains("html"),info.path != browser.currentArticleID?.path else {return false}
-        crawler.conversation.say("Following offline article: "+info.title+". Your word rule and restrictions stay active.")
-        transitionMission=crawler.agent.state.mission;transitioning=true;browser.navigate(info.path);return true
-    }
     private func follow(_ link:CrawlerTerrain,userDirected:Bool=false) async throws -> Bool {
         let requestToken=token
         guard let crawler,crawler.conversation.permitsSection(link),crawler.conversation.rules.allowLinks,crawler.conversation.rules.permits(link.text+" "+(link.href ?? "")) else {return false}
@@ -173,13 +155,17 @@ final class CrawlerIntelligence {
         guard transitioning,let crawler else {return}
         transitioning=false
         switch transitionMission ?? .semanticHunt(mission) {
-        case .freeCrawl:crawler.start(hunt:false,preserveExpedition:true)
-        case .stringHunt(let text):crawler.target=text;crawler.start(hunt:true,preserveExpedition:true)
-        case .semanticHunt(let text):crawler.target=text;crawler.start(hunt:false,semantic:true,preserveExpedition:true)
+        case .freeCrawl:crawler.start(hunt:false,preserveExpedition:true,preservingConversation:true)
+        case .stringHunt(let text):crawler.target=text;crawler.start(hunt:true,preserveExpedition:true,preservingConversation:true)
+        case .semanticHunt(let text):crawler.target=text;crawler.start(hunt:false,semantic:true,preserveExpedition:true,preservingConversation:true)
         }
         crawler.setGuidanceSuppressed(crawler.conversation.isGuiding)
     }
     func navigationFailed() {cancel();note="The local destination could not be opened. Choose another article and restart the mission."}
-    private func fail() {failed=true;note="No sufficiently strong evidence was discovered. Continue exploring or choose a different starting article.";crawler?.pause()}
+    private func fail() {
+        failed=true;note="No sufficiently strong evidence was discovered. Continue exploring or choose a different starting article."
+        crawler?.pauseCreature()
+        crawler?.conversation.say("I explored \(path.count) article\(path.count == 1 ? "" : "s") without finding strong evidence for “\(mission)”. That doesn't prove it isn't there. Give me another starting article or a narrower topic.")
+    }
     func continueExploring() {failed=false;evaluations=0;started=Date();crawler?.resume()}
 }

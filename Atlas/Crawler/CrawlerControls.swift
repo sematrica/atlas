@@ -56,6 +56,7 @@ struct CompanionPanel:View {
     @State private var manual=false
     private let gold=Color(red:0.85,green:0.73,blue:0.49)
     private let ink=Color(red:0.065,green:0.078,blue:0.083)
+    private let suggestions=["Highlight the adjectives in green","How many links are on this page?","Take me to the longest word","What is this article about?"]
     var body:some View {
         VStack(spacing:0) {
             HStack(spacing:10) {
@@ -73,30 +74,36 @@ struct CompanionPanel:View {
                 Image(systemName:"book.closed").font(.system(size:12)).foregroundStyle(gold.opacity(0.65))
                 VStack(alignment:.leading,spacing:4) {
                     Text(conversation.companionTitle).font(.system(size:12,weight:.medium)).foregroundStyle(.white.opacity(0.85)).lineLimit(2)
-                    Text(crawler.intelligence.model.isEmpty ? "Choose a model in Ask" : crawler.intelligence.model)
-                        .font(.system(size:10,design:.monospaced)).foregroundStyle(.white.opacity(0.4)).lineLimit(1)
+                    HStack(spacing:6) {
+                        Text(crawler.intelligence.model.isEmpty ? "No chat model · choose one in Ask" : crawler.intelligence.model)
+                            .font(.system(size:10,design:.monospaced)).foregroundStyle(.white.opacity(0.4)).lineLimit(1)
+                        if let fit=crawler.intelligence.fit,!crawler.intelligence.model.isEmpty {FitBadge(fit:fit)}
+                    }
                 }
                 Spacer(minLength:0)
                 Circle().fill(crawler.ready ? gold : .gray).frame(width:5,height:5).padding(.top,4)
             }.padding(12).background(.white.opacity(0.035),in:RoundedRectangle(cornerRadius:10)).padding(.horizontal,16)
             ScrollViewReader {proxy in
                 ScrollView {
-                    VStack(alignment:.leading,spacing:22) {
+                    VStack(alignment:.leading,spacing:20) {
                         if conversation.lines.isEmpty {
                             VStack(alignment:.leading,spacing:14) {
                                 Text("A mind beside\nyour page.").font(.system(size:29,weight:.regular,design:.serif)).foregroundStyle(.white.opacity(0.93))
-                                Text("Discuss a thought. Follow a detail.\nWhen you want to see, I'll point.").font(.system(size:13)).foregroundStyle(.white.opacity(0.5)).lineSpacing(4)
-                                Button("What do you make of this article?  ↗") {conversation.talk("What do you make of this article?")}.font(.system(size:12)).foregroundStyle(gold).buttonStyle(.plain)
+                                Text("Ask me anything about the article, or give me a task.\nThe spider is my pair of hands.").font(.system(size:13)).foregroundStyle(.white.opacity(0.5)).lineSpacing(4)
+                                VStack(alignment:.leading,spacing:8) {
+                                    ForEach(suggestions,id:\.self) {suggestion in
+                                        Button(suggestion+"  ↗") {conversation.send(suggestion)}.font(.system(size:12)).foregroundStyle(gold).buttonStyle(.plain)
+                                    }
+                                }
                             }.padding(.vertical,16)
                         }
-                        ForEach(Array(conversation.lines.enumerated()),id:\.element.id) {index,line in
-                            VStack(alignment:.leading,spacing:8) {
-                                Text(line.user ? "YOU" : "ATLAS").font(.system(size:9,weight:.medium,design:.monospaced)).tracking(2).foregroundStyle(line.user ? .white.opacity(0.4) : gold)
+                        ForEach(conversation.lines) {line in
+                            VStack(alignment:.leading,spacing:6) {
+                                Text(line.user ? "YOU" : "ATLAS").font(.system(size:9,weight:.medium,design:.monospaced)).tracking(2)
+                                    .foregroundStyle(line.user ? .white.opacity(0.4) : line.isError ? .orange : gold)
                                 Text(line.text).font(.system(size:14)).lineSpacing(5).foregroundStyle(.white.opacity(line.user ? 0.70 : 0.91)).textSelection(.enabled)
-                                if !line.user && !line.toolActivity.isEmpty &&
-                                    (index+1 == conversation.lines.count || conversation.lines[index+1].user) {
-                                    CompanionToolActivityView(items:line.toolActivity)
-                                        .padding(.top,4)
+                                if !line.trail.isEmpty {
+                                    Text(line.trail.joined(separator:"  ·  ")).font(.system(size:9,design:.monospaced)).foregroundStyle(.white.opacity(0.35))
                                 }
                             }.frame(maxWidth:.infinity,alignment:.leading).padding(line.user ? 13 : 0)
                                 .background(line.user ? .white.opacity(0.045) : .clear,in:RoundedRectangle(cornerRadius:12)).id(line.id)
@@ -106,28 +113,25 @@ struct CompanionPanel:View {
                 }
                 .onChange(of:conversation.lines.last?.id) {withAnimation(.easeOut(duration:0.2)) {proxy.scrollTo("companion-bottom",anchor:.bottom)}}
             }
-            if let id=conversation.companionFocus,let result=conversation.companionResults.first(where:{$0.id == id}),result.canDemonstrate {
+            if !conversation.layers.isEmpty {HighlightLegend(conversation:conversation).padding(.horizontal,16).padding(.bottom,8)}
+            if let result=conversation.focused,result.canDemonstrate,!conversation.busy {
                 Button {conversation.demonstrateFocused()} label: {
-                    HStack {Image(systemName:"scope");Text("\(result.count) · \(result.title)").lineLimit(1);Spacer();Image(systemName:"arrow.up.right")}
+                    HStack {Image(systemName:"scope");Text("\(result.id) · \(result.count) \(result.label)").lineLimit(1);Spacer();Image(systemName:"arrow.up.right")}
                         .font(.system(size:11,weight:.medium)).foregroundStyle(gold).padding(11)
                         .background(gold.opacity(0.065),in:RoundedRectangle(cornerRadius:9)).overlay(RoundedRectangle(cornerRadius:9).stroke(gold.opacity(0.18)))
-                }.buttonStyle(.plain).padding(.horizontal,16).padding(.bottom,10).help("Demonstrate this saved finding")
-            }
-            if (conversation.companionBusy || conversation.pageTaskActive) && !conversation.companionToolActivity.isEmpty {
-                CompanionToolActivityView(items:conversation.companionToolActivity,live:true)
-                    .padding(.horizontal,16).padding(.bottom,10)
+                }.buttonStyle(.plain).padding(.horizontal,16).padding(.bottom,10).help("Show this result again")
             }
             HStack(spacing:7) {
-                if conversation.companionBusy {ProgressView().controlSize(.mini).tint(gold)}
-                Text(conversation.companionStatus).font(.system(size:10)).foregroundStyle(.white.opacity(0.45)).lineLimit(1)
+                if conversation.busy {ProgressView().controlSize(.mini).tint(gold)}
+                Text(conversation.status).font(.system(size:10)).foregroundStyle(.white.opacity(0.45)).lineLimit(1)
                 Spacer(minLength:0)
-                if conversation.companionBusy || conversation.pageTaskActive {Button("Stop",action:conversation.stopCompanion).font(.system(size:10)).buttonStyle(.plain).foregroundStyle(gold)}
-            }.padding(.horizontal,19).padding(.bottom,8).help(conversation.companionCoverage)
-            if !conversation.companionCoverage.isEmpty {Text(conversation.companionCoverage).font(.system(size:9)).foregroundStyle(.white.opacity(0.3)).lineLimit(1).padding(.horizontal,18).padding(.bottom,7)}
+                if conversation.canFinish {Button("Finish now",action:conversation.finishTour).font(.system(size:10)).buttonStyle(.plain).foregroundStyle(gold).help("Highlight the rest at once")}
+                if conversation.busy || conversation.touring || crawler.active {Button("Stop",action:conversation.stopAll).font(.system(size:10)).buttonStyle(.plain).foregroundStyle(gold)}
+            }.padding(.horizontal,19).padding(.bottom,8)
             HStack(alignment:.bottom,spacing:8) {
-                TextField("A question, a thought, a challenge…",text:$conversation.input,axis:.vertical).lineLimit(1...4)
-                    .textFieldStyle(.plain).font(.system(size:13)).foregroundStyle(.white).onSubmit {conversation.talk()}
-                Button {conversation.talk()} label: {
+                TextField("A question, a task, a challenge…",text:$conversation.input,axis:.vertical).lineLimit(1...4)
+                    .textFieldStyle(.plain).font(.system(size:13)).foregroundStyle(.white).onSubmit {conversation.send()}
+                Button {conversation.send()} label: {
                     Image(systemName:"arrow.up").font(.system(size:12,weight:.semibold)).foregroundStyle(ink).frame(width:28,height:28).background(gold,in:RoundedRectangle(cornerRadius:8))
                 }.buttonStyle(.plain).disabled(conversation.input.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty).accessibilityLabel("Send message")
             }.padding(12).background(.white.opacity(0.05),in:RoundedRectangle(cornerRadius:13)).overlay(RoundedRectangle(cornerRadius:13).stroke(.white.opacity(0.12))).padding(.horizontal,16).padding(.bottom,16)
@@ -137,69 +141,54 @@ struct CompanionPanel:View {
     }
 }
 
-private struct CompanionToolActivityView:View {
-    let items:[CompanionToolActivity]
-    var live=false
-    private let gold=Color(red:0.85,green:0.73,blue:0.49)
-    private let columns=[GridItem(.flexible(),spacing:6),GridItem(.flexible(),spacing:6)]
-
+/// The highlight layers on the page, each removable.
+private struct HighlightLegend:View {
+    @Bindable var conversation:CrawlerConversation
     var body:some View {
-        VStack(alignment:.leading,spacing:9) {
-            HStack(spacing:6) {
-                Image(systemName:live ? "circle.dotted.circle" : "square.stack.3d.up")
-                    .font(.system(size:10))
-                    .foregroundStyle(gold)
-                Text(live ? "TOOLS IN USE" : "TOOLS FOR THIS REPLY")
-                    .font(.system(size:9,weight:.semibold,design:.monospaced))
-                    .tracking(1.3)
-                    .foregroundStyle(.white.opacity(0.6))
-                Spacer(minLength:0)
-                Text("\(items.filter {$0.state == .used}.count) used")
-                    .font(.system(size:9,design:.monospaced))
-                    .foregroundStyle(gold.opacity(0.8))
+        VStack(alignment:.leading,spacing:6) {
+            HStack {
+                Text("HIGHLIGHTS").font(.system(size:9,weight:.semibold,design:.monospaced)).tracking(1.3).foregroundStyle(.white.opacity(0.55))
+                Spacer()
+                Button("Clear all",action:conversation.clearAllLayers).font(.system(size:10)).buttonStyle(.plain).foregroundStyle(.white.opacity(0.55))
             }
-            LazyVGrid(columns:columns,alignment:.leading,spacing:6) {
-                ForEach(items) {item in
-                    HStack(spacing:5) {
-                        Circle().fill(color(item.state)).frame(width:5,height:5)
-                        Text(item.title).lineLimit(1).truncationMode(.tail)
-                            .foregroundStyle(.white.opacity(item.state == .idle || item.state == .unavailable ? 0.48 : 0.86))
-                        Spacer(minLength:1)
-                        Text(label(item.state))
-                            .foregroundStyle(color(item.state))
-                    }
-                    .font(.system(size:9,weight:.medium))
-                    .padding(.horizontal,7).padding(.vertical,6)
-                    .background(.white.opacity(item.state == .used || item.state == .working ? 0.055 : 0.025),in:RoundedRectangle(cornerRadius:6))
-                    .overlay(RoundedRectangle(cornerRadius:6).stroke(.white.opacity(item.state == .used || item.state == .working ? 0.10 : 0.045)))
-                    .help(item.detail.isEmpty ? "\(item.title): \(label(item.state))" : "\(item.title): \(label(item.state)). \(item.detail)")
-                    .accessibilityLabel("\(item.title), \(label(item.state))")
-                    .accessibilityHint(Text(item.detail))
+            ForEach(conversation.layers) {layer in
+                HStack(spacing:7) {
+                    HStack(spacing:0) {
+                        ForEach(Array(layer.style.palette.prefix(6).enumerated()),id:\.offset) {_,hex in Rectangle().fill(Color(hex:hex))}
+                    }.frame(width:22,height:10).clipShape(RoundedRectangle(cornerRadius:3))
+                    Text("\(layer.label)").font(.system(size:11)).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
+                    Text("\(layer.count)").font(.system(size:10,design:.monospaced)).foregroundStyle(.white.opacity(0.4))
+                    Spacer(minLength:0)
+                    Button {conversation.removeLayer(layer.id)} label: {Image(systemName:"xmark").font(.system(size:9,weight:.semibold))}
+                        .buttonStyle(.plain).foregroundStyle(.white.opacity(0.45)).help("Remove these highlights")
                 }
             }
-        }
-        .padding(10)
-        .background(.white.opacity(0.025),in:RoundedRectangle(cornerRadius:10))
-        .overlay(RoundedRectangle(cornerRadius:10).stroke(.white.opacity(0.08)))
+        }.padding(10).background(.white.opacity(0.03),in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(.white.opacity(0.07)))
     }
+}
 
-    private func label(_ state:CompanionToolState)->String {
-        switch state {
-        case .used:return "Used"
-        case .working:return "Working"
-        case .failed:return "Failed"
-        case .idle:return "Not used"
-        case .unavailable:return "Unavailable"
+/// Strong / medium / weak fit of the chosen chat model.
+struct FitBadge:View {
+    let fit:ModelFitBadge
+    var body:some View {
+        Text(fit.rating.title.replacingOccurrences(of:" fit",with:"")+(fit.measured ? "" : "?"))
+            .font(.system(size:9,weight:.semibold)).padding(.horizontal,6).padding(.vertical,2)
+            .foregroundStyle(color).background(color.opacity(0.14),in:Capsule())
+            .help(fit.summary+(fit.measured ? "" : " (estimate; run the fit test in Ask to measure)"))
+    }
+    var color:Color {
+        switch fit.rating {
+        case .strong: .green
+        case .medium: .yellow
+        case .weak: .orange
+        case .unknown: .gray
         }
     }
+}
 
-    private func color(_ state:CompanionToolState)->Color {
-        switch state {
-        case .used:return gold
-        case .working:return .cyan
-        case .failed:return .orange
-        case .idle:return .white.opacity(0.32)
-        case .unavailable:return .orange.opacity(0.7)
-        }
+extension Color {
+    init(hex:String) {
+        let value=Int(hex.dropFirst(),radix:16) ?? 0
+        self.init(red:Double((value>>16)&255)/255,green:Double((value>>8)&255)/255,blue:Double(value&255)/255)
     }
 }

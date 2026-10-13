@@ -27,6 +27,11 @@ final class PackageLibraryModel {
         self.storage=storage; downloads=DownloadManager(storage:storage);intelligence=IntelligenceModel(storage:storage);research=ResearchModel(storage:storage)
         browser.crawler.intelligence.provider=intelligence.provider
         browser.crawler.intelligence.model=intelligence.chatModel
+        let crawler=browser.crawler
+        intelligence.onChatModelChange={[weak crawler] name in crawler?.intelligence.model=name}
+        intelligence.onFitChange={[weak crawler] badge in crawler?.intelligence.fit=badge}
+        let ai=intelligence
+        Task {await ai.evaluateFit()}
         browser.crawler.intelligence.persist={discovery in
             do {
                 let access=try await storage.acquire()
