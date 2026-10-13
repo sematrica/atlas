@@ -27,8 +27,8 @@ final class IntelligenceModel {
     var fitReport:ModelFitReport?
     var fitTesting=false
     var fitProgress=0.0
-    @ObservationIgnored var onChatModelChange:((String)->Void)?
-    @ObservationIgnored var onFitChange:((ModelFitBadge?)->Void)?
+    @ObservationIgnored var onChatModelChange:(@MainActor (String)->Void)?
+    @ObservationIgnored var onFitChange:(@MainActor (ModelFitBadge?)->Void)?
     @ObservationIgnored private var fitTask:Task<Void,Never>?
     @ObservationIgnored private let storage:StorageManager
     @ObservationIgnored private var index:SemanticIndex?

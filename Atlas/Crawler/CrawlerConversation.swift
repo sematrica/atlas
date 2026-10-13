@@ -71,6 +71,8 @@ final class CrawlerConversation {
     @ObservationIgnored private var planNavigation=false
     @ObservationIgnored private var finishRequested=false
     @ObservationIgnored private var announcedHunt:String?
+    /// A result Atlas just offered to highlight ("Want me to highlight them?").
+    @ObservationIgnored private var offeredResult:String?
 
     init(crawler:CrawlerController) {self.crawler=crawler}
 
@@ -92,7 +94,7 @@ final class CrawlerConversation {
 
     /// Cancels the running request. Highlights and saved results stay.
     func interrupt() {
-        generation=UUID();task?.cancel();task=nil
+        generation=UUID();task?.cancel();task=nil;offeredResult=nil
         endRequest()
     }
     private func endRequest() {
@@ -127,19 +129,38 @@ final class CrawlerConversation {
         let request=(supplied ?? input).trimmingCharacters(in:.whitespacesAndNewlines)
         guard !request.isEmpty,let crawler else {return}
         input=""
+        let offer=offeredResult
         interrupt()
         say(request,user:true)
         guard request.count<=4000 else {say("Please keep messages under 4,000 characters.");return}
-        let local=CompanionLocalParser.parse(request)
+        var local=CompanionLocalParser.parse(request)
+        // "Yes" right after "Want me to highlight them?" needs no model.
+        if local == nil,let offer,Self.affirmative(request) {
+            var step=CompanionStep(action:"show");step.result=offer
+            local=CompanionPlan(steps:[step],local:true)
+        }
         let model=crawler.intelligence.model
         if local == nil && model.isEmpty {
             say("Choose a chat model in Ask so I can understand that. Without one I still follow direct requests like “how many links are here”, “highlight nouns in green” or “go to the longest word”.")
             return
         }
+        start(request,local:local)
+    }
+    /// Runs a ready-made plan as if the user had asked for it.
+    func run(_ plan:CompanionPlan,saying request:String) {
+        interrupt()
+        say(request,user:true)
+        start(request,local:plan)
+    }
+    private func start(_ request:String,local:CompanionPlan?) {
         busy=true
-        status=local == nil ? "Thinking with \(model)…" : "On it…"
+        status=local == nil ? "Thinking with \(crawler?.intelligence.model ?? "the model")…" : "On it…"
         let token=generation
         task=Task { [weak self] in await self?.handle(request,local:local,token:token)}
+    }
+    static func affirmative(_ text:String)->Bool {
+        let cleaned=text.lowercased().trimmingCharacters(in:.whitespacesAndNewlines.union(.punctuationCharacters))
+        return ["yes","yes please","yeah","yep","sure","ok","okay","please","please do","do it","go ahead","go for it","show me","show them","highlight them","yes highlight them","sure thing","why not"].contains(cleaned)
     }
     /// Kept for callers of the previous companion API.
     func talk(_ supplied:String?=nil) {send(supplied)}
@@ -363,7 +384,7 @@ final class CrawlerConversation {
             text=result.label.hasPrefix("the ") ? "I found \(result.label)." : "There are \(Self.format(n)) \(result.label) on this page."
         }
         if !result.complete {text += " The page was too long to map completely, so the real number may be higher."}
-        if n>1,n<=3000,result.canDemonstrate {text += " Want me to highlight them?"}
+        if n>1,n<=3000,result.canDemonstrate {text += " Want me to highlight them?";offeredResult=result.id}
         let line=say(text)
         if local {amend(line,trail:"understood instantly")}
     }
@@ -608,7 +629,12 @@ final class CrawlerConversation {
         let wanted=title.trimmingCharacters(in:.whitespacesAndNewlines)
         guard !wanted.isEmpty else {say("Which article should I open?");return page}
         status="Searching for “\(wanted)”…"
-        let found=try await provider.search(wanted,limit:8)
+        var found=try await provider.search(wanted,limit:8)
+        if found.isEmpty {
+            // The title index can be case-sensitive: try "Paris", "Ray Charles".
+            let titled=wanted.split(separator:" ").map {$0.prefix(1).uppercased()+$0.dropFirst()}.joined(separator:" ")
+            if titled != wanted {found=try await provider.search(titled,limit:8)}
+        }
         try checkpoint(token)
         guard let best=found.first(where:{$0.title.caseInsensitiveCompare(wanted) == .orderedSame}) ?? found.first else {
             say("I couldn't find an article called “\(wanted)” in this package.");return page
@@ -790,7 +816,8 @@ final class CrawlerConversation {
     /// The focus chip under the conversation: show the latest result again.
     func demonstrateFocused() {
         guard let focused else {return}
-        send("show \(focused.id) again")
+        var step=CompanionStep(action:"show");step.result=focused.id
+        run(CompanionPlan(steps:[step],local:true),saying:"Show the \(focused.label) again")
     }
 
     // MARK: Page bridge

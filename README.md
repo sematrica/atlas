@@ -15,7 +15,9 @@ Open `Atlas.xcodeproj` in Xcode, select **Atlas / My Mac**, and Run. The app use
 
 For advanced datasets, choose **Wikimedia archives**, enter a Wikimedia project identifier such as `enwiki` or `simplewiki`, and load the catalog. These are downloaded and checksum-verified under `dumps/`, but are labeled **Archive only / Stored**. Atlas does not import or render raw XML/SQL/history dumps.
 
-Large articles and images remain on the selected storage device. Changing library folders never copies or deletes the old library. Switching storage pauses active downloads and closes the current reader. Ask remains a placeholder. Crawl now supports Free Crawl and exact String Hunt; no LLM, semantic search or embeddings are included.
+Large articles and images remain on the selected storage device. Changing library folders never copies or deletes the old library. Switching storage pauses active downloads and closes the current reader.
+
+Beside every article is a **reading companion** that answers questions and carries out tasks on the page, with an animated spider as its hands: counting ("how many capital letters are here?"), finding and highlighting in any colors ("find all adjectives that end with w and highlight them in green"), walking to targets and sections, following links, hunting for phrases and exploring by topic. Common requests run instantly without a model; everything else uses one local Ollama call. See [the companion guide](Docs/Companion.md). **Ask** answers questions from an embedding index of chosen articles, and **Research** reads across the library to write cited reports ([Research](Docs/Research.md)).
 
 ## Build
 
@@ -43,7 +45,7 @@ The existing two-module architecture remains:
 - **AtlasCore:** storage actor, library identity and scoped access, catalog parsing, download lifecycle, manifests, verification, local URL policy and archive-provider contracts.
 - **ZIMBridge:** a small C ABI around maintained OpenZIM C++. Exceptions stay inside C++; allocations have explicit ownership. `ZIMArticleProvider` confines its searcher to a Swift actor. The UI depends on `ArticleProvider`, not C++ or a concrete archive format.
 
-Browsing, conventional search, future AI and future Crawler retain separate interfaces. Search uses no AI. No full encyclopedia scan or one-object-per-article preload occurs.
+Browsing, conventional search, the companion and the crawler keep separate interfaces. Search uses no AI. No full encyclopedia scan or one-object-per-article preload occurs.
 
 ### Catalog sources
 
@@ -89,7 +91,7 @@ Archive redirects are resolved to canonical paths before top-level navigation, p
 
 ### Local search and crawler boundary
 
-`FullTextSearch` remains independent of LLMProvider. Stage 2 implements **title search** with libzim's SuggestionSearcher: it uses the embedded title index where available and libzim's ordered-title fallback otherwise. A fallback archive may require original capitalization/prefixes. Atlas does not build a second index, so no additional indexing state is necessary. Full-text ranking, fuzzy search and SQLite FTS5 remain future work.
+`FullTextSearch` remains independent of LLMProvider. Stage 2 implements **title search** with libzim's SuggestionSearcher: it uses the embedded title index where available and libzim's ordered-title fallback otherwise. A fallback archive may require original capitalization/prefixes. Atlas does not build a second index for browsing. Research can build an optional SQLite FTS5 index; fuzzy title search remains future work.
 
 `atlasDocument` retains the isolated Contents bridge. Phase 3 adds `atlasTerrain` in the same isolated client world and an origin-checked `atlasCrawlerMetrics` handler. Only bounded local word/terrain observations reach the crawler. Its target never enters JavaScript or the archive search provider. Native rendering, local perception and medium-level navigation run separately. See [the crawler architecture and verification record](Docs/Phase3.md).
 
