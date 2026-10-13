@@ -71,6 +71,12 @@ final class CrawlerRenderer:NSView {
             for point in crawler.agent.memory.recentPositions {context.fillEllipse(in:CGRect(x:point.x-2,y:point.y-2,width:4,height:4))}
             context.move(to:CGPoint(x:p.x,y:p.y));context.addLine(to:CGPoint(x:state.desired.x,y:state.desired.y));context.strokePath()
         }
+        drawTouches(context)
+        if crawler.neonStyle {drawNeonCreature(context,at:p,state:state)} else {drawAmberCreature(context,at:p,state:state)}
+    }
+    /// The original amber mechanical creature.
+    private func drawAmberCreature(_ context:CGContext,at p:DocumentPosition,state:CrawlerState) {
+        context.saveGState();defer {context.restoreGState()}
         // A restrained amber aura connects the page hand to its companion panel.
         let glow=NSColor(calibratedRed:0.88,green:0.73,blue:0.44,alpha:1)
         context.saveGState()
@@ -129,7 +135,77 @@ final class CrawlerRenderer:NSView {
         context.move(to:CGPoint(x:-10,y:0));context.addLine(to:CGPoint(x:-6,y:0));context.strokePath()
         context.setFillColor(accent.cgColor)
         for y in [-2.5,2.5] {context.fillEllipse(in:CGRect(x:6,y:y-1,width:2.5,height:2))}
+    }
 
+    static let neonCyan=NSColor(calibratedRed:0.25,green:0.93,blue:1,alpha:1)
+    static let neonBlue=NSColor(calibratedRed:0.40,green:0.50,blue:1,alpha:1)
+    static let neonPink=NSColor(calibratedRed:1,green:0.25,blue:0.44,alpha:1)
+
+    /// Neon boxes around the words the feet touch, fading after the foot lifts.
+    private func drawTouches(_ context:CGContext) {
+        guard crawler.touchGlow,!crawler.touchMarks.isEmpty else {return}
+        let now=ProcessInfo.processInfo.systemUptime
+        for mark in crawler.touchMarks.values {
+            let alpha=CrawlerController.touchAlpha(now-mark.time)
+            guard alpha>0.01 else {continue}
+            let color:NSColor,filled:Bool
+            switch mark.style {
+            case .cyanOutline: color=Self.neonCyan;filled=false
+            case .blueOutline: color=Self.neonBlue;filled=false
+            case .pinkFill: color=Self.neonPink;filled=true
+            case .blueFill: color=Self.neonBlue;filled=true
+            case .cyanFill: color=Self.neonCyan;filled=true
+            }
+            let box=CGRect(x:mark.rect.x-3,y:mark.rect.y-1.5,width:mark.rect.width+6,height:mark.rect.height+3)
+            context.saveGState()
+            context.setShadow(offset:.zero,blur:9*alpha,color:color.withAlphaComponent(0.85*alpha).cgColor)
+            if filled {context.setFillColor(color.withAlphaComponent(0.34*alpha).cgColor);context.fill(box)}
+            context.setStrokeColor(color.withAlphaComponent(0.95*alpha).cgColor);context.setLineWidth(1.6)
+            context.stroke(box)
+            context.restoreGState()
+        }
+    }
+
+    /// A neon, debug-style creature: cyan limbs, pink joints and feet, a boxy body with a glowing eye.
+    private func drawNeonCreature(_ context:CGContext,at p:DocumentPosition,state:CrawlerState) {
+        let spawn=min(1,state.elapsed/0.65)
+        let found=state.behavior == .found
+        let limb=found ? NSColor.systemGreen : Self.neonCyan
+        let joint=found ? NSColor.systemGreen : Self.neonPink
+        context.saveGState()
+        context.setAlpha(spawn)
+        // Limbs with a soft glow.
+        context.setShadow(offset:.zero,blur:5,color:limb.withAlphaComponent(0.7).cgColor)
+        context.setStrokeColor(limb.withAlphaComponent(0.95).cgColor);context.setLineWidth(1.5);context.setLineCap(.round);context.setLineJoin(.round)
+        for i in crawler.legs.legs.indices {
+            let a=crawler.legs.attachment(i,body:p),k=animatedKnee(i,body:p),foot=crawler.legs.drawnFoot(i,body:p)
+            context.move(to:CGPoint(x:a.x,y:a.y))
+            context.addLine(to:CGPoint(x:p.x+(k.x-p.x)*spawn,y:p.y+(k.y-p.y)*spawn))
+            context.addLine(to:CGPoint(x:p.x+(foot.x-p.x)*spawn,y:p.y+(foot.y-p.y)*spawn))
+        }
+        context.strokePath()
+        // Pink joints and feet; a lifted foot is drawn smaller.
+        context.setShadow(offset:.zero,blur:4,color:joint.withAlphaComponent(0.8).cgColor)
+        context.setFillColor(joint.cgColor)
+        for i in crawler.legs.legs.indices {
+            let raw=animatedKnee(i,body:p),k=DocumentPosition(x:p.x+(raw.x-p.x)*spawn,y:p.y+(raw.y-p.y)*spawn)
+            context.fillEllipse(in:CGRect(x:k.x-2,y:k.y-2,width:4,height:4))
+            let foot=crawler.legs.drawnFoot(i,body:p),size=4.2-crawler.legs.legs[i].lift*1.6
+            context.fillEllipse(in:CGRect(x:foot.x-size/2,y:foot.y-size/2,width:size,height:size))
+        }
+        context.restoreGState()
+        // The body: a dark box outlined in cyan, rocking slightly with each step, with a glowing eye at the front.
+        let stepBalance=crawler.reduceMotion ? 0 : crawler.legs.legs.enumerated().reduce(0.0) {sum,entry in sum+entry.element.lift*(entry.offset<4 ? 1 : -1)}
+        context.saveGState()
+        context.setAlpha(spawn)
+        context.translateBy(x:p.x,y:p.y);context.rotate(by:crawler.legs.heading+stepBalance*0.02)
+        let body=CGRect(x:-12,y:-6,width:24,height:12)
+        context.setFillColor(NSColor(calibratedRed:0.03,green:0.05,blue:0.08,alpha:0.92).cgColor);context.fill(body)
+        context.setShadow(offset:.zero,blur:6,color:limb.withAlphaComponent(0.8).cgColor)
+        context.setStrokeColor(limb.cgColor);context.setLineWidth(1.5);context.stroke(body)
+        context.setFillColor(limb.withAlphaComponent(crawler.conversation.busy ? 1 : 0.85).cgColor)
+        context.fillEllipse(in:CGRect(x:4,y:-2.6,width:5.2,height:5.2))
+        context.restoreGState()
     }
 }
 

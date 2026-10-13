@@ -25,7 +25,7 @@ Removed: `AtlasCore/Crawler/CrawlerCompanion.swift` (regex guards, fixed tool me
 
 **Ollama** (`AtlasCore/AI/LLMProvider.swift`, new `OllamaProvider.swift`): schema-constrained output with a fallback to JSON mode for Ollama < 0.5; model validation cached for 10 minutes instead of two extra requests per call; one fixed `num_ctx` (8192) so Ollama never reloads the model between calls; `keep_alive` 30 minutes; `profile(model:)` for the fit meter.
 
-**Crawler motion**: `CrawlerLegController.swift` (tetrapod gait, IK knees, dash scuttle above 600 pt/s), `CrawlerNavigator.swift` (curious, coverage-aware wandering instead of row-by-row sweeps), `CrawlerController.swift` (take/release control, pause or stop without cancelling the conversation, travel-speed override, hunt "found" announcement), `CrawlerRenderer.swift` (draws IK knees, clamped feet, body bob).
+**Crawler motion**: `CrawlerLegController.swift` (tetrapod gait, IK knees, dash scuttle above 600 pt/s), `CrawlerNavigator.swift` (curious, coverage-aware wandering instead of row-by-row sweeps), `CrawlerController.swift` (take/release control, pause or stop without cancelling the conversation, travel-speed override, hunt "found" announcement), `CrawlerRenderer.swift` (draws IK knees, clamped feet, body bob, the neon creature and neon boxes around touched words).
 
 No new app-target files were added, so `Atlas.xcodeproj` needs no changes. New AtlasCore files are picked up by the Swift package automatically.
 
@@ -61,7 +61,7 @@ Scripts/test-browser.sh
 ATLAS_BUILD_DIR=/tmp/AtlasStage2Build Scripts/test-layout.sh
 ```
 
-Places most likely to need a compile fix, in order: `CrawlerControls.swift` (new `HighlightLegend`, `FitBadge`, `Color(hex:)`), `IntelligenceView.swift` (`CompanionFitRow`), `CrawlerRenderer.swift` (knee and foot drawing), `BrowserSmoke.swift`.
+Places most likely to need a compile fix, in order: `CrawlerControls.swift` (new `HighlightLegend`, `FitBadge`, `Color(hex:)`), `IntelligenceView.swift` (`CompanionFitRow`), `CrawlerRenderer.swift` (knee, foot, neon creature and touch-box drawing), `BrowserSmoke.swift`.
 
 ## Manual acceptance on the Mac
 
@@ -76,7 +76,7 @@ With `llama3.1:latest` selected in Ask (the badge should read **Medium?** until 
    - `go to the second longest word` · `take me to the Early life section` · `go to the bottom`
    - Resize the window: highlights must stay. Click × on a legend row, then `clear highlights`.
    - Model requests: `paint every word to do with music in purple`, `what is this article about?`, `open the article on Paris and count its links`, `hunt for the phrase "…"`, `wander`, `faster`, `stop`.
-3. Watch the spider: no legs snapping across the page, knees bending outward, a quick scuttle on long trips, curious wandering rather than rows. Letters under its feet should glow amber and fade into a short trail as it walks (Touch glow in the manual tools).
+3. Watch the spider: no legs snapping across the page, knees bending outward, a quick scuttle on long trips, curious wandering rather than rows. It should look neon (cyan legs, pink joints, dark body with a cyan eye), and each word or link under a planted foot should get a glowing neon box that fades into a short trail as it walks (Touch glow and Neon in the manual tools).
 
 ## Known limits and ideas for next steps
 

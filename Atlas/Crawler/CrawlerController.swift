@@ -10,8 +10,13 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
     var target=""
     var autoFollow=true
     var debug=false
-    /// Letters under the spider's feet and body glow, and fade after it moves on.
-    var touchGlow=true {didSet {if !touchGlow {webView?.evaluateJavaScript("window.atlasTerrain?.clearTouch()",in:nil,in:.defaultClient){_ in}}}}
+    /// Words under the spider's feet get a neon box and glow, fading after it moves on.
+    var touchGlow=true {didSet {if !touchGlow {touchMarks=[:];webView?.evaluateJavaScript("window.atlasTerrain?.clearTouch()",in:nil,in:.defaultClient){_ in};renderer?.needsDisplay=true}}}
+    /// Neon debug-style creature (cyan legs, pink joints); off draws the amber mechanical spider.
+    var neonStyle=true {didSet {renderer?.needsDisplay=true}}
+    /// Words the feet are touching or touched recently, keyed by word or link.
+    @ObservationIgnored private(set) var touchMarks:[String:TouchMark]=[:]
+    @ObservationIgnored private var lastTouchScan=0.0
     var radius=140.0
     var ready=false
     var status:CrawlerBehavior = .idle
@@ -69,6 +74,7 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
                     guard self.epoch == token,!Task.isCancelled else {return}
                     if self.touchGlow {
                         _ = try? await webView.callAsyncJavaScript("return window.atlasTerrain?.touch(points)",arguments:["points":self.touchPoints()],in:nil,contentWorld:.defaultClient)
+                        if self.status == .paused {self.scanTouches(force:true);self.renderer?.needsDisplay=true}
                     }
                     if self.autoFollow && ![.paused,.found,.idle].contains(self.status) {
                         _ = try await webView.callAsyncJavaScript("window.atlasTerrain?.follow(x,y,smooth)",arguments:["x":self.agent.state.position.x,"y":self.agent.state.position.y,"smooth":!self.reduceMotion],in:nil,contentWorld:.defaultClient)
@@ -83,16 +89,58 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
         }
         if semantic {intelligence.begin(reset:!preserveExpedition)}
     }
-    /// Planted feet, plus a few points along the body, in document coordinates.
+    /// Planted feet in document coordinates.
     private func touchPoints()->[[String:Any]] {
         let body=agent.state.position
-        var points:[[String:Any]]=legs.legs.indices.filter {!legs.legs[$0].isStepping}.map {
+        return legs.legs.indices.filter {!legs.legs[$0].isStepping}.map {
             let foot=legs.drawnFoot($0,body:body)
             return ["x":foot.x,"y":foot.y]
         }
-        let dx=cos(legs.heading)*8,dy=sin(legs.heading)*8
-        for step in [-1.0,0,1] {points.append(["x":body.x+dx*step,"y":body.y+dy*step,"body":true])}
-        return points
+    }
+    static let touchFade=1.6
+    /// Full strength while touched, then a fade.
+    static func touchAlpha(_ age:Double)->Double {age<0.2 ? 1 : max(0,1-(age-0.2)/(touchFade-0.2))}
+    var hasFadingTouches:Bool {
+        let now=ProcessInfo.processInfo.systemUptime
+        return touchMarks.values.contains {now-$0.time>0.2 && now-$0.time<Self.touchFade}
+    }
+    /// Finds the words (or whole links) under planted feet in the current observation.
+    func scanTouches(force:Bool=false) {
+        let now=ProcessInfo.processInfo.systemUptime
+        guard touchGlow,force || now-lastTouchScan>=0.05 else {return}
+        lastTouchScan=now
+        touchMarks=touchMarks.filter {now-$0.value.time<Self.touchFade}
+        guard let observation=agent.observation else {return}
+        let words=observation.terrain.filter {!$0.text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty}
+        guard !words.isEmpty else {return}
+        let byID=Dictionary(words.map {($0.id,$0)},uniquingKeysWith:{first,_ in first})
+        let body=agent.state.position
+        for i in legs.legs.indices where !legs.legs[i].isStepping {
+            let foot=legs.drawnFoot(i,body:body)
+            var hit=legs.legs[i].anchorID.flatMap {byID[String($0.dropLast())]}
+            if hit == nil {
+                hit=words.first {TerrainRect(x:$0.rect.x-3,y:$0.rect.y-3,width:$0.rect.width+6,height:$0.rect.height+6).contains(foot)}
+            }
+            guard let item=hit else {continue}
+            let (key,rect)=Self.region(of:item,in:words)
+            if var mark=touchMarks[key] {mark.time=now;mark.rect=rect;touchMarks[key]=mark;continue}
+            touchMarks[key]=TouchMark(rect:rect,style:TouchMark.style(for:key,kind:item.kind),time:now)
+        }
+    }
+    /// A word's box without its trailing space; a link's box spans all its visible words on that line.
+    static func region(of item:CrawlerTerrain,in words:[CrawlerTerrain])->(String,TerrainRect) {
+        func trimmed(_ word:CrawlerTerrain)->TerrainRect {
+            let text=word.text,kept=text.trimmingCharacters(in:.whitespacesAndNewlines).count
+            let width=text.isEmpty ? word.rect.width : word.rect.width*Double(kept)/Double(max(1,text.count))
+            return .init(x:word.rect.x,y:word.rect.y,width:width,height:word.rect.height)
+        }
+        guard item.kind == .link,let href=item.href else {return (item.id,trimmed(item))}
+        let line=words.filter {$0.group == item.group && $0.href == href && abs($0.rect.y-item.rect.y)<item.rect.height*0.5}
+        let boxes=line.map(trimmed)
+        let left=boxes.map(\.x).min() ?? item.rect.x,top=boxes.map(\.y).min() ?? item.rect.y
+        let right=boxes.map {$0.x+$0.width}.max() ?? item.rect.x+item.rect.width
+        let bottom=boxes.map {$0.y+$0.height}.max() ?? item.rect.y+item.rect.height
+        return (item.group+"|"+href+"|"+String(Int(item.rect.y)),.init(x:left,y:top,width:right-left,height:bottom-top))
     }
     func inspectFor(_ seconds:Double) {guard active,status != .paused else {return};agent.inspect(for:seconds);status=agent.state.behavior}
     func setGuidanceSuppressed(_ value:Bool) {agent.suppressHunt(value)}
@@ -129,6 +177,7 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
         guard epoch == token else {return}
         perceptionMilliseconds=Date().timeIntervalSince(began)*1000
         viewport=sample.viewport;agent.perceive(sample);anchors=agent.observation?.anchors ?? [];status=agent.state.behavior;updateInspector()
+        scanTouches()
         await conversation.inspect(sample)
     }
     func observe(around position:DocumentPosition,radius:Double) async throws -> CrawlerObservation {
@@ -145,7 +194,8 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
             legs.advance(body:agent.state.position,velocity:.zero,anchors:pageFootholds ?? anchors,
                          dt:min(dt,0.05),reduceMotion:reduceMotion,strict:pageFootholds != nil)
             settlingTime += min(dt,0.05)
-            if settlingTime>0.45 && !legs.legs.contains(where:\.isStepping) {renderer?.stopAnimation()}
+            scanTouches()
+            if settlingTime>0.45 && !legs.legs.contains(where:\.isStepping) && !hasFadingTouches {renderer?.stopAnimation()}
             return
         }
         settlingTime=0
@@ -154,6 +204,7 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
         agent.advance(dt:dt,speed:pageFootholds == nil ? pace : min(90,pace),reduceMotion:reduceMotion)
         intelligence.didMove()
         legs.advance(body:agent.state.position,velocity:agent.state.velocity,anchors:pageFootholds ?? anchors,dt:min(dt,0.05),reduceMotion:reduceMotion,strict:pageFootholds != nil)
+        scanTouches()
         if status != agent.state.behavior {status=agent.state.behavior}
         if highlighted != nil,agent.state.match == nil {clearHighlight()}
         if status == .found,let match=agent.state.match,highlighted != match.key {
@@ -176,7 +227,7 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
     func stopCreature(preserveExpedition:Bool) {
         if !preserveExpedition {intelligence.cancel()}
         epoch=UUID();senses?.cancel();senses=nil;agent.stop();status = .idle;renderer?.stopAnimation();clearHighlight();error=nil
-        pageFootholds=nil;travelSpeed=nil
+        pageFootholds=nil;travelSpeed=nil;touchMarks=[:]
     }
     private func clearHighlight() {
         highlighted=nil
@@ -193,5 +244,23 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
               let body=message.body as? [String:Any],let raw=body["viewport"],
               let data=try? JSONSerialization.data(withJSONObject:raw),let rect=try? JSONDecoder().decode(TerrainRect.self,from:data) else {return}
         viewport=rect;renderer?.needsDisplay=true
+    }
+}
+
+/// A word or link the spider touched, drawn as a neon box on the overlay.
+struct TouchMark {
+    enum Style:Int {case cyanOutline,blueOutline,pinkFill,blueFill,cyanFill}
+    var rect:TerrainRect
+    let style:Style
+    var time:Double
+    /// Mostly cyan outlines, links in blue, and an occasional filled box, stable per word.
+    static func style(for key:String,kind:TerrainKind)->Style {
+        let hash=key.unicodeScalars.reduce(UInt32(2166136261)) {($0 ^ $1.value) &* 16777619}
+        switch hash%9 {
+        case 0: return .pinkFill
+        case 1: return .blueFill
+        case 2: return .cyanFill
+        default: return kind == .link || kind == .citation ? .blueOutline : .cyanOutline
+        }
     }
 }
