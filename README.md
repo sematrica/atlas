@@ -157,6 +157,7 @@ Stage 1 files modified:
 - `Package.swift`, `Atlas.xcodeproj/project.pbxproj`: native bridge dependency and dylib embedding; existing app configuration retained.
 - `Atlas/Atlas.entitlements`: outbound network entitlement for catalog/download operations.
 - `Atlas/Assets.xcassets/AppIcon.appiconset`: the app icon (a glowing constellation spider walking in a dark rounded square), at every macOS size from 16 to 1024 px. To change it, replace the PNGs at the same sizes; `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon` points the build at it.
+  macOS caches app icons, so after the icon changes Finder and a pinned Dock item can keep the old one. The running app always shows its own icon (`AtlasApp` sets it at launch from the bundle); to refresh the caches too, quit the app, raise `CURRENT_PROJECT_VERSION`, rebuild, and run `killall Dock Finder`.
 - `Atlas/Assets.xcassets/SematricaEmblem.imageset`: the same creature cut out of its tile on a transparent background, used for the companion's header and the toolbar's **Companion** button. Replace it whenever the app icon changes.
 - `Atlas/App/LibraryViewModel.swift`: reuse existing storage while coordinating package state and long-lived access.
 - `Atlas/UI/ContentView.swift`, `Atlas/UI/LibraryView.swift`: functional Library/Browse/Search screens; Crawl was subsequently implemented in Phase 3.
