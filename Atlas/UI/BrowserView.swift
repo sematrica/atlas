@@ -22,7 +22,8 @@ struct BrowserView: View {
                             Button("\(record.package.language) · \(record.package.name) · \(record.package.version)") { Task { await library.open(record) } }
                         }
                     } label: { Label(browser.record?.package.name ?? "Open Wikipedia",systemImage:"book") }
-                    Button {showCrawler.toggle()} label: {Label("Companion",systemImage:"sparkle")}.tint(.init(red:0.79,green:0.66,blue:0.42))
+                    Button {showCrawler.toggle()} label: {CompanionToolbarLabel(active:showCrawler || emphasizeCrawl,busy:browser.crawler.conversation.busy)}
+                        .buttonStyle(.plain).help(showCrawler ? "Hide the companion" : "Show the companion")
                     Spacer()
                     if browser.loading { ProgressView().controlSize(.small) }
                     Menu {

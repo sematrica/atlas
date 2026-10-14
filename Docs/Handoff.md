@@ -22,7 +22,7 @@ This branch replaces Codex's companion pipeline and reworks the crawler's moveme
 | Phrase lookup in the Research text index | `ResearchStore.articlePaths(matching:limit:)` |
 | Executor: runs each step with the spider (tours, sweeps, navigation, hunts, rules) | `Atlas/Crawler/CrawlerConversation.swift` (rewritten) |
 | Highlight layers that survive reflow; tags and sections in the page map | `Atlas/Crawler/DocumentGeometryScript.swift` |
-| Companion panel: trails, legend, Finish now, fit badge | `Atlas/Crawler/CrawlerControls.swift` |
+| Companion panel: trails, legend, Finish now, fit badge; constellation theme (night background, thread of nodes, orange core, emblem) and the toolbar's Companion button | `Atlas/Crawler/CrawlerControls.swift`, `Atlas/UI/BrowserView.swift` |
 | Fit meter in Ask | `Atlas/Intelligence/IntelligenceModel.swift`, `IntelligenceView.swift` |
 
 Removed: `AtlasCore/Crawler/CrawlerCompanion.swift` (regex guards, fixed tool menu), `AtlasCore/Crawler/CrawlerIntent.swift` and most of `CrawlerCommands.swift` (the old "Talk to crawler" path, no longer wired to any UI), and their tests and docs.
@@ -68,7 +68,7 @@ ATLAS_BUILD_DIR=/tmp/AtlasStage2Build Scripts/test-layout.sh
 
 `az_fulltext_page` in `Native/ZIMBridge/ZIMBridge.cpp` is new native code: check it links and that a library question in a ZIM with a full-text index pages past 100 results.
 
-Places most likely to need a compile fix, in order: `CrawlerControls.swift` (new `HighlightLegend`, `FitBadge`, `Color(hex:)`), `IntelligenceView.swift` (`CompanionFitRow`), `CrawlerRenderer.swift` (knee, foot, creature-look and touch-box drawing; it was type-checked here against stand-ins for AppKit and CoreGraphics), `BrowserSmoke.swift`.
+Places most likely to need a compile fix, in order: `CrawlerControls.swift` (new `HighlightLegend`, `FitBadge`, `Color(hex:)`, and the constellation theme: `ThreadNode`, `ConstellationEmblem`, `ConstellationBackdrop`, `CompanionToolbarLabel`), `IntelligenceView.swift` (`CompanionFitRow`), `CrawlerRenderer.swift` (knee, foot, creature-look and touch-box drawing; it was type-checked here against stand-ins for AppKit and CoreGraphics), `BrowserSmoke.swift`.
 
 ## Manual acceptance on the Mac
 
@@ -90,6 +90,7 @@ With `llama3.1:latest` selected in Ask (the badge should read **Medium?** until 
    - Click an article in the list: it should open and highlight the matches. Try **Copy list**.
    - On a large package, `how many articles mention the` should stop after 2,000 articles and offer **Check more articles**.
    - In a package without a built-in index, build part of the text index under Research and check the answer says the index isn't finished.
+5. Companion look: the panel should be dark in both light and dark mode, with the constellation emblem in the header (its orange core breathing while a reply is in progress), messages strung on a thin thread of light, orange accents for Sematrica's name, links and the send button, and readable text everywhere (check the text field, the legend and the manual-tools popover). The toolbar's **Companion** button should show the small emblem on a dark capsule whose edge glows orange while the panel is open.
 
 ## Known limits and ideas for next steps
 
