@@ -64,7 +64,7 @@ struct CompanionPanel:View {
     var body:some View {
         VStack(spacing:0) {
             HStack(spacing:12) {
-                ConstellationEmblem(busy:conversation.busy).frame(width:42,height:42)
+                ConstellationEmblem(busy:conversation.busy).frame(width:50,height:50)
                 VStack(alignment:.leading,spacing:3) {
                     Text("SEMATRICA").font(.system(size:11,weight:.semibold,design:.monospaced)).tracking(4.5).foregroundStyle(Constellation.starlight)
                         .shadow(color:.white.opacity(0.45),radius:4)
@@ -235,89 +235,31 @@ struct ThreadNode:View {
     private var glow:Color {kind == .core ? Constellation.core : kind == .warning ? Constellation.warning : .white}
 }
 
-/// The constellation creature in miniature, upright as in the app icon: a haloed head,
-/// a spine of glass spheres around an orange core, a lattice, legs ending in ringed feet,
-/// and a slanting beam. The core breathes while the companion is working.
+/// Sematrica's emblem: the constellation creature from the app icon, cut out of its tile
+/// (`SematricaEmblem` in the asset catalog) so it floats on the night background.
+/// Its orange core breathes while the companion is working.
 struct ConstellationEmblem:View {
     var busy=false
+    /// Where the orange core sits in the image, as a fraction of its side.
+    private static let core=CGPoint(x:0.596,y:0.471)
     var body:some View {
-        TimelineView(.animation(minimumInterval:1.0/30,paused:!busy)) {timeline in
-            let pulse=busy ? 0.5+0.5*sin(timeline.date.timeIntervalSinceReferenceDate*3.2) : 0
-            Canvas {context,size in Self.draw(&context,size:size,pulse:pulse)}
-        }
-        .accessibilityHidden(true)
-    }
-
-    static func draw(_ context:inout GraphicsContext,size:CGSize,pulse:Double) {
-        let s=min(size.width,size.height),ox=(size.width-s)/2,oy=(size.height-s)/2
-        let simple=s<28
-        func p(_ x:Double,_ y:Double)->CGPoint {CGPoint(x:ox+x/100*s,y:oy+y/100*s)}
-        func r(_ value:Double)->CGFloat {value/100*s}
-        func circle(_ x:Double,_ y:Double,_ radius:Double)->Path {
-            Path(ellipseIn:CGRect(x:p(x,y).x-r(radius),y:p(x,y).y-r(radius),width:r(radius)*2,height:r(radius)*2))
-        }
-        // Drawn into whichever context is passed, so the glowing layer below gets its shadow.
-        func line(_ g:GraphicsContext,_ points:[(Double,Double)],opacity:Double=0.85,width:Double=0.9) {
-            var path=Path();path.move(to:p(points[0].0,points[0].1))
-            for point in points.dropFirst() {path.addLine(to:p(point.0,point.1))}
-            g.stroke(path,with:.color(.white.opacity(opacity)),lineWidth:max(0.5,r(width)))
-        }
-        func dot(_ g:GraphicsContext,_ x:Double,_ y:Double,_ radius:Double,opacity:Double=1) {
-            g.fill(circle(x,y,radius),with:.color(.white.opacity(opacity)))
-        }
-        func ring(_ g:GraphicsContext,_ x:Double,_ y:Double,_ radius:Double,opacity:Double=0.7) {
-            g.stroke(circle(x,y,radius),with:.color(.white.opacity(opacity)),lineWidth:max(0.5,r(0.8)))
-        }
-        // The beam, under everything.
-        context.drawLayer {layer in
-            layer.addFilter(.shadow(color:Constellation.core.opacity(0.9),radius:r(2.5)))
-            var beam=Path();beam.move(to:p(54,56));beam.addLine(to:p(80,97))
-            layer.stroke(beam,with:.linearGradient(Gradient(colors:[.white.opacity(0.95),Constellation.coreHot.opacity(0.8),.clear]),startPoint:p(54,56),endPoint:p(80,97)),lineWidth:max(0.6,r(1.3)))
-        }
-        context.drawLayer {layer in
-            layer.addFilter(.shadow(color:.white.opacity(0.7),radius:r(1.6)))
-            // Legs: three a side, from the body out to ringed feet.
-            let legs:[[(Double,Double)]]=[[(44,30),(36,22),(13,22)],[(43,44),(33,40),(13,40)],[(44,58),(34,64),(13,64)]]
-            for leg in legs {
-                line(layer,leg,opacity:0.8)
-                line(layer,leg.map {(100-$0.0,$0.1)},opacity:0.8)
-                if !simple {dot(layer,leg[1].0,leg[1].1,1.2);dot(layer,100-leg[1].0,leg[1].1,1.2)}
+        Image("SematricaEmblem").renderingMode(.original).resizable().interpolation(.high).scaledToFit()
+            .overlay {
+                if busy {
+                    GeometryReader {proxy in
+                        TimelineView(.animation(minimumInterval:1.0/30)) {timeline in
+                            let pulse=0.5+0.5*sin(timeline.date.timeIntervalSinceReferenceDate*3.2)
+                            let side=proxy.size.width
+                            Circle().fill(RadialGradient(colors:[Constellation.coreHot.opacity(0.9),Constellation.core.opacity(0.55),.clear],center:.center,startRadius:0,endRadius:side*0.13))
+                                .frame(width:side*0.26,height:side*0.26)
+                                .opacity(0.3+0.7*pulse)
+                                .position(x:Self.core.x*side,y:Self.core.y*proxy.size.height)
+                        }
+                    }
+                    .allowsHitTesting(false)
+                }
             }
-            // The lattice around the spine.
-            let left:[(Double,Double)]=[(50,16),(43,30),(42,44),(43,58),(46,72),(50,78)]
-            line(layer,left,opacity:0.75);line(layer,left.map {(100-$0.0,$0.1)},opacity:0.75)
-            if !simple {
-                line(layer,[(43,30),(50,44),(57,30)],opacity:0.45,width:0.6)
-                line(layer,[(42,44),(58,44)],opacity:0.35,width:0.6)
-                line(layer,[(43,58),(50,44),(57,58)],opacity:0.4,width:0.6)
-            }
-            line(layer,[(50,8),(50,92)],opacity:0.6,width:0.7)
-            // Joints, the head and its halo, and the tail's fading dots.
-            for point in left.dropFirst().dropLast() {dot(layer,point.0,point.1,simple ? 1.6 : 1.3);dot(layer,100-point.0,point.1,simple ? 1.6 : 1.3)}
-            ring(layer,50,10,simple ? 6.5 : 5.5);dot(layer,50,10,simple ? 2.6 : 2.2)
-            dot(layer,50,84,1.4);dot(layer,50,89,1.1);dot(layer,50,93,0.7)
-            for foot in legs.map({$0[2]}) {
-                dot(layer,foot.0,foot.1,simple ? 2 : 1.6);dot(layer,100-foot.0,foot.1,simple ? 2 : 1.6)
-                if !simple {ring(layer,foot.0,foot.1,3.4,opacity:0.55);ring(layer,100-foot.0,foot.1,3.4,opacity:0.55)}
-            }
-        }
-        // Glass spheres along the spine.
-        for (y,radius) in simple ? [(36.0,4.0)] : [(30.0,4.2),(46.0,4.0),(76.0,3.8)] {
-            context.fill(circle(50,y,radius),with:.radialGradient(Gradient(colors:[.white.opacity(0.85),.white.opacity(0.3),.white.opacity(0.08)]),center:p(50,y),startRadius:0,endRadius:r(radius)))
-            context.stroke(circle(50,y,radius),with:.color(.white.opacity(0.6)),lineWidth:max(0.4,r(0.5)))
-        }
-        // The orange core, breathing while busy.
-        context.drawLayer {layer in
-            let radius=simple ? 7.0 : 6.2
-            layer.addFilter(.shadow(color:Constellation.core.opacity(0.95),radius:r(4+5*pulse)))
-            layer.fill(circle(50,61,radius),with:.radialGradient(Gradient(colors:[Constellation.coreHot,Constellation.core,Constellation.coreDeep]),center:p(50,61),startRadius:0,endRadius:r(radius)))
-        }
-        if !simple {
-            var sparkle=Path();let c=p(50,61)
-            sparkle.move(to:CGPoint(x:c.x-r(3.2),y:c.y));sparkle.addLine(to:CGPoint(x:c.x+r(3.2),y:c.y))
-            sparkle.move(to:CGPoint(x:c.x,y:c.y-r(3.2)));sparkle.addLine(to:CGPoint(x:c.x,y:c.y+r(3.2)))
-            context.stroke(sparkle,with:.color(.white.opacity(0.9)),lineWidth:max(0.4,r(0.5)))
-        }
+            .accessibilityHidden(true)
     }
 }
 
@@ -351,10 +293,10 @@ struct CompanionToolbarLabel:View {
     var busy=false
     var body:some View {
         HStack(spacing:6) {
-            ConstellationEmblem(busy:busy).frame(width:18,height:18)
+            ConstellationEmblem(busy:busy).frame(width:22,height:22)
             Text("Companion").font(.system(size:12,weight:.medium)).foregroundStyle(active ? Constellation.starlight : Constellation.dim)
         }
-        .padding(.leading,5).padding(.trailing,10).padding(.vertical,3)
+        .padding(.leading,4).padding(.trailing,10).padding(.vertical,2)
         .background(Capsule().fill(LinearGradient(colors:[Constellation.dusk,Constellation.night],startPoint:.top,endPoint:.bottom)))
         .overlay(Capsule().stroke(active ? Constellation.core.opacity(0.75) : Constellation.hairline,lineWidth:active ? 1 : 0.8))
         .shadow(color:active ? Constellation.core.opacity(0.35) : .clear,radius:5)

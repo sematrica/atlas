@@ -2,7 +2,7 @@
 
 Open an article and type into the panel beside it. Sematrica answers questions about the article and carries out tasks on the page. The spider is its pair of hands: it walks to text, highlights it, follows links and explores.
 
-The panel wears the creature's look: a night-sky background, threads and nodes of white light, and one orange core. Its emblem is the constellation from the app icon, and the core breathes while Sematrica is working. Each message is a node on a single thread: rings for you, stars for Sematrica, a pulsing core for the reply in progress, and a red ring for errors. The toolbar's **Companion** button carries the same emblem; its edge glows orange while the panel is open. The theme lives in `Constellation`, `ThreadNode`, `ConstellationEmblem` and `ConstellationBackdrop` in `Atlas/Crawler/CrawlerControls.swift`.
+The panel wears the creature's look: a night-sky background, threads and nodes of white light, and one orange core. Its emblem is the creature from the app icon, cut out of its tile (`SematricaEmblem` in the asset catalog), and its core breathes while Sematrica is working. Each message is a node on a single thread: rings for you, stars for Sematrica, a pulsing core for the reply in progress, and a red ring for errors. The toolbar's **Companion** button carries the same emblem; its edge glows orange while the panel is open. The theme lives in `Constellation`, `ThreadNode`, `ConstellationEmblem` and `ConstellationBackdrop` in `Atlas/Crawler/CrawlerControls.swift`.
 
 ## What you can ask
 
