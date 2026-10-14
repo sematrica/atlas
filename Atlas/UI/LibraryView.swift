@@ -8,7 +8,7 @@ struct LibraryView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("wiki-atlas")
+                    Text("Sematrica")
                         .font(.system(size: 32, weight: .medium, design: .serif))
                     Text("Keep Wikipedia on your Mac or an external drive. Your library stays where you choose.")
                         .font(.body).foregroundStyle(.secondary)

@@ -67,7 +67,7 @@ struct CompanionPanel:View {
                 Image(systemName:"sparkle").font(.system(size:21,weight:.ultraLight)).foregroundStyle(gold)
                     .frame(width:36,height:36).background(gold.opacity(0.08),in:Circle()).overlay(Circle().stroke(gold.opacity(0.25)))
                 VStack(alignment:.leading,spacing:2) {
-                    Text("ATLAS").font(.system(size:11,weight:.semibold,design:.monospaced)).tracking(4).foregroundStyle(gold)
+                    Text("SEMATRICA").font(.system(size:11,weight:.semibold,design:.monospaced)).tracking(4).foregroundStyle(gold)
                     Text("Your reading companion").font(.system(size:12)).foregroundStyle(.white.opacity(0.55))
                 }
                 Spacer()
@@ -103,7 +103,7 @@ struct CompanionPanel:View {
                         }
                         ForEach(conversation.lines) {line in
                             VStack(alignment:.leading,spacing:6) {
-                                Text(line.user ? "YOU" : "ATLAS").font(.system(size:9,weight:.medium,design:.monospaced)).tracking(2)
+                                Text(line.user ? "YOU" : "SEMATRICA").font(.system(size:9,weight:.medium,design:.monospaced)).tracking(2)
                                     .foregroundStyle(line.user ? .white.opacity(0.4) : line.isError ? .orange : gold)
                                 Text(line.text).font(.system(size:14)).lineSpacing(5).foregroundStyle(.white.opacity(line.user ? 0.70 : 0.91)).textSelection(.enabled)
                                 if !line.trail.isEmpty {

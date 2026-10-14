@@ -49,7 +49,7 @@ struct ContentView: View {
             .navigationSplitViewColumnWidth(min: 170, ideal: 200, max: 240)
             .safeAreaInset(edge: .bottom) {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("ATLAS").font(.caption.weight(.semibold)).tracking(3)
+                    Text("SEMATRICA").font(.caption.weight(.semibold)).tracking(3)
                     Text("wikipedia").font(.caption).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
