@@ -13,7 +13,7 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
     /// Words under the spider's feet get a glowing box, fading after it moves on.
     var touchGlow=true {didSet {if !touchGlow {touchMarks=[:];webView?.evaluateJavaScript("window.atlasTerrain?.clearTouch()",in:nil,in:.defaultClient){_ in};renderer?.needsDisplay=true}}}
     /// How the creature and its touch boxes are drawn; remembered between launches.
-    var look=CreatureLook(rawValue:UserDefaults.standard.string(forKey:"atlas.crawler.look") ?? "") ?? .constellation {
+    var look=CreatureLook(rawValue:UserDefaults.standard.string(forKey:"atlas.crawler.look") ?? "") ?? .sematrica {
         didSet {UserDefaults.standard.set(look.rawValue,forKey:"atlas.crawler.look");renderer?.needsDisplay=true}
     }
     /// Words the feet are touching or touched recently, keyed by word or link.
@@ -251,7 +251,10 @@ final class CrawlerController:NSObject,CrawlerPerception,WKScriptMessageHandler 
 
 /// The creature's drawing style.
 enum CreatureLook:String,CaseIterable,Identifiable {
-    /// A lattice of light in a dark crystal, with an orange core (the default).
+    /// The creature from the app icon: glass legs on glowing joints, a faceted crystal body
+    /// with an orange core, a beaded tail and a spike of light (the default).
+    case sematrica
+    /// A lattice of light in a dark crystal, with an orange core.
     case constellation
     /// Cyan limbs, pink joints and a boxy body.
     case neon
@@ -260,6 +263,7 @@ enum CreatureLook:String,CaseIterable,Identifiable {
     var id:String {rawValue}
     var title:String {
         switch self {
+        case .sematrica: "Sematrica"
         case .constellation: "Constellation"
         case .neon: "Neon"
         case .mechanical: "Mechanical"
@@ -268,11 +272,13 @@ enum CreatureLook:String,CaseIterable,Identifiable {
     /// The glow color of touched letters, as "r,g,b" for the page script.
     var touchTint:String {
         switch self {
-        case .constellation: "255,150,40"
+        case .sematrica,.constellation: "255,150,40"
         case .neon: "64,236,255"
         case .mechanical: "224,186,112"
         }
     }
+    /// White light that needs a dark edge to show on a white page.
+    var drawnInLight:Bool {self == .sematrica || self == .constellation}
 }
 
 /// A word or link the spider touched, drawn as a glowing box on the overlay.
