@@ -8,6 +8,7 @@ The engine plans subquestions, searches the open archive, reads selected passage
 
 - Built-in ZIM full-text search is used when available.
 - Otherwise, **Build / Resume Text Index** creates an on-disk SQLite FTS5 index from extracted article paragraphs. Before it finishes, research uses title search and the partial text index. This index is separate from Ask's embedding index.
+- The same text index finds candidate articles for the companion's library questions ("how many articles mention …") when the archive has no built-in full-text index. See [Companion.md](Companion.md#across-the-library).
 - Ordinary research is selective. It expands searches and follows links, with bounded queues and up to 60 search queries per job.
 - **Sequentially review every article** enumerates the archive and processes readable HTML articles in batches. Resume until traversal and the queue finish. Images, resources, and redirects are not separate research articles.
 - Each article contributes up to eight selected passages and five validated notes. Sequential mode does not read every sentence. Failed articles are counted separately; completion is not proof that every possible answer has been found.

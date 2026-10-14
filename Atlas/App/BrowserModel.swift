@@ -28,6 +28,9 @@ final class BrowserModel {
     }
     var record: PackageRecord?
     var provider: (any ArticleProvider)?
+    /// Kept so library questions can open the Research text index for this package.
+    @ObservationIgnored private var access: LibraryAccess?
+    @ObservationIgnored private var textIndex: ResearchStore?
     var webView: WKWebView?
     var title="Offline Wikipedia"
     var query=""
@@ -47,7 +50,7 @@ final class BrowserModel {
         let provider=try await Task.detached { try ZIMArticleProvider(access:access,record:record) }.value
         let main=try await provider.info()
         guard session == sessionID else { return }
-        self.provider=provider; self.record=record
+        self.provider=provider; self.record=record; self.access=access
         let web=try await OfflineWebFactory.make(provider:provider,host:record.package.storageKey,model:self)
         guard session == sessionID else { return }
         webView=web; title=main.title
@@ -56,8 +59,18 @@ final class BrowserModel {
     func close() {
         crawler.stop();crawler.ready=false;pendingCitation=nil
         searchTask?.cancel(); webView?.navigationDelegate=nil; webView?.stopLoading(); webView?.configuration.userContentController.removeAllScriptMessageHandlers()
-        webView=nil; provider=nil; record=nil; results=[]; headings=[]; message=nil; query=""; title="Offline Wikipedia"
+        webView=nil; provider=nil; record=nil; access=nil; textIndex=nil; results=[]; headings=[]; message=nil; query=""; title="Offline Wikipedia"
         canGoBack=false; canGoForward=false; loading=false; searching=false; sessionID=UUID()
+    }
+    /// The Research text index for the open package (opened on first use), or nil.
+    func libraryTextIndex() async -> ResearchStore? {
+        if let textIndex {return textIndex}
+        guard let access,let record else {return nil}
+        let session=sessionID
+        let store=try? await Task.detached {try ResearchStore(access:access,record:record)}.value
+        guard session == sessionID else {return nil}
+        textIndex=store
+        return store
     }
     func search() {
         searchTask?.cancel(); results=[]; searchMessage=nil

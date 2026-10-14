@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import AtlasCore
 
 struct CrawlerControls:View {
@@ -58,9 +59,10 @@ struct CompanionPanel:View {
     @Bindable var conversation:CrawlerConversation
     @Bindable var crawler:CrawlerController
     @State private var manual=false
+    @State private var expandedLibrary:Set<UUID>=[]
     private let gold=Color(red:0.85,green:0.73,blue:0.49)
     private let ink=Color(red:0.065,green:0.078,blue:0.083)
-    private let suggestions=["Highlight the adjectives in green","How many links are on this page?","Take me to the longest word","What is this article about?"]
+    private let suggestions=["Highlight the adjectives in green","How many links are on this page?","Take me to the longest word","What is this article about?","How many articles mention jazz?"]
     var body:some View {
         VStack(spacing:0) {
             HStack(spacing:10) {
@@ -108,6 +110,17 @@ struct CompanionPanel:View {
                                 Text(line.text).font(.system(size:14)).lineSpacing(5).foregroundStyle(.white.opacity(line.user ? 0.70 : 0.91)).textSelection(.enabled)
                                 if !line.trail.isEmpty {
                                     Text(line.trail.joined(separator:"  ·  ")).font(.system(size:9,design:.monospaced)).foregroundStyle(.white.opacity(0.35))
+                                }
+                                if let library=line.library {
+                                    if !library.hits.isEmpty {
+                                        LibraryHitList(library:library,conversation:conversation,expanded:expandedLibrary.contains(line.id),gold:gold) {
+                                            if expandedLibrary.contains(line.id) {expandedLibrary.remove(line.id)} else {expandedLibrary.insert(line.id)}
+                                        }
+                                    }
+                                    if library.canContinue,!conversation.busy {
+                                        Button("Check more articles  ↗") {conversation.continueLibrary()}
+                                            .font(.system(size:12)).foregroundStyle(gold).buttonStyle(.plain)
+                                    }
                                 }
                             }.frame(maxWidth:.infinity,alignment:.leading).padding(line.user ? 13 : 0)
                                 .background(line.user ? .white.opacity(0.045) : .clear,in:RoundedRectangle(cornerRadius:12)).id(line.id)
@@ -194,5 +207,49 @@ extension Color {
     init(hex:String) {
         let value=Int(hex.dropFirst(),radix:16) ?? 0
         self.init(red:Double((value>>16)&255)/255,green:Double((value>>8)&255)/255,blue:Double(value&255)/255)
+    }
+}
+
+/// The articles a library question found, most matches first. Each one opens the
+/// article and highlights what was counted there.
+struct LibraryHitList:View {
+    let library:LibraryLine
+    let conversation:CrawlerConversation
+    let expanded:Bool
+    let gold:Color
+    let toggle:()->Void
+    var body:some View {
+        let shown=expanded ? library.hits : Array(library.hits.prefix(6))
+        VStack(alignment:.leading,spacing:4) {
+            ForEach(shown) {hit in
+                Button {conversation.openLibraryHit(hit,query:library.query)} label: {
+                    HStack(spacing:8) {
+                        Text(hit.title).lineLimit(1)
+                        Spacer(minLength:8)
+                        Text(hit.count.formatted()).font(.system(size:11,design:.monospaced)).foregroundStyle(.white.opacity(0.5))
+                        Image(systemName:"arrow.up.right").font(.system(size:9))
+                    }
+                    .font(.system(size:12)).foregroundStyle(.white.opacity(0.85))
+                    .padding(.vertical,5).padding(.horizontal,9)
+                    .background(.white.opacity(0.04),in:RoundedRectangle(cornerRadius:7))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(hit.sample.map {"Open and highlight · “\($0)”"} ?? "Open and highlight the matches")
+            }
+            HStack(spacing:14) {
+                if library.hits.count>6 {Button(expanded ? "Show fewer" : "Show all \(library.hits.count)",action:toggle)}
+                if library.matchingArticles>library.hits.count {
+                    Text("top \(library.hits.count) of \(library.matchingArticles.formatted())").foregroundStyle(.white.opacity(0.35))
+                }
+                Button("Copy list") {
+                    let text=library.hits.map {"\($0.title)\t\($0.count)"}.joined(separator:"\n")
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text,forType:.string)
+                }.help("Copy the titles and counts, one per line")
+            }
+            .font(.system(size:10)).buttonStyle(.plain).foregroundStyle(gold)
+        }
+        .padding(.top,2)
     }
 }

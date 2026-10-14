@@ -78,6 +78,19 @@ int az_fulltext(AZArchive archive,const char *query,int limit,AZMatch **matches,
         copyMatches(rows,matches,count);return 1;
     } AZ_CATCH
 }
+int az_fulltext_page(AZArchive archive,const char *query,int offset,int limit,AZMatch **matches,int *count,int *estimated,char **error) {
+    try {
+        auto& archiveRef=static_cast<Reader *>(archive)->archive;
+        if(!archiveRef.hasFulltextIndex()) throw std::runtime_error("No full-text index in this archive");
+        zim::Searcher searcher(archiveRef);zim::Query q;q.setQuery(query);
+        auto search=searcher.search(q);
+        *estimated=search.getEstimatedMatches();
+        auto results=search.getResults(std::max(offset,0),std::min(std::max(limit,1),500));
+        std::vector<std::pair<std::string,std::string>> rows;
+        for(auto it=results.begin();it!=results.end();++it) rows.emplace_back(it.getPath(),it.getTitle());
+        copyMatches(rows,matches,count);return 1;
+    } AZ_CATCH
+}
 int az_articles(AZArchive archive,uint64_t offset,int limit,AZMatch **matches,int *count,uint64_t *next,char **error) {
     try {
         auto& a=static_cast<Reader *>(archive)->archive;

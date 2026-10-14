@@ -4,7 +4,7 @@ import Foundation
 /// action needs; everything is validated and executed by Atlas itself.
 public struct CompanionStep:Codable,Sendable,Equatable {
     /// count, list, highlight, goto, clear, show, go, follow, open, back,
-    /// hunt, explore, wander, pause, resume, stop, speed, rule, read
+    /// hunt, explore, wander, pause, resume, stop, speed, rule, read, library
     public var action:String
     /// What to look for (count, list, highlight, goto).
     public var query:PageQuery?
@@ -32,11 +32,24 @@ public struct CompanionStep:Codable,Sendable,Equatable {
     public var rule:String?
     /// The question to answer after reading the whole article (read).
     public var question:String?
+    /// library: which articles. library (all), linked (linked from this article; `place` = a section),
+    /// titles (the articles in `titles`), search (the best results for `topic`).
+    public var scope:String?
+    /// library: articles (how many contain a match), total (all matches added up), list (which articles).
+    public var measure:String?
+    /// library: article titles for the titles scope.
+    public var titles:[String]?
+    /// library: at most this many articles from the scope.
+    public var articles:Int?
+    /// open: an exact archive path. Set by Sematrica itself (a library result's Open button);
+    /// it isn't in the model's schema.
+    public var path:String?
 
     public init(action:String,query:PageQuery?=nil) {self.action=action;self.query=query}
 
     enum CodingKeys:String,CodingKey {
         case action,query,footing,color,instant,target,result,place,title,phrase,topic,speed,rule,question
+        case scope,measure,titles,articles,path
     }
     public init(from decoder:Decoder) throws {
         let c=try decoder.container(keyedBy:CodingKeys.self)
@@ -54,9 +67,14 @@ public struct CompanionStep:Codable,Sendable,Equatable {
         speed=c.lenientString(.speed)
         rule=c.lenientString(.rule)
         question=c.lenientString(.question)
+        scope=c.lenientString(.scope)
+        measure=c.lenientString(.measure)
+        titles=c.lenientStrings(.titles)
+        articles=c.lenientInt(.articles)
+        path=c.lenientString(.path)
     }
 
-    public static let actions=["count","list","highlight","goto","clear","show","go","follow","open","back","hunt","explore","wander","pause","resume","stop","speed","rule","read"]
+    public static let actions=["count","list","highlight","goto","clear","show","go","follow","open","back","hunt","explore","wander","pause","resume","stop","speed","rule","read","library"]
     static let queryActions:Set<String>=["count","list","highlight","goto"]
 
     /// Maps synonyms a model might use onto the executable action names.
@@ -67,6 +85,8 @@ public struct CompanionStep:Codable,Sendable,Equatable {
         step.footing=footing?.normalized()
         if let value=speed {step.speed=Self.normalizeSpeed(value)}
         if let value=rule {step.rule=Self.normalizeRule(value)}
+        if let value=scope {step.scope=Self.normalizeScope(value)}
+        if let value=measure {step.measure=Self.normalizeMeasure(value)}
         switch raw {
         case "count","howmany","measure","tally","number": step.action="count"
         case "list","tell","name","enumerate","what","which","show list","answerwith": step.action="list"
@@ -95,8 +115,16 @@ public struct CompanionStep:Codable,Sendable,Equatable {
             step.action="rule"
             if step.rule == nil {step.rule=Self.normalizeRule(raw)}
         case "read","summarize","summarise","summary","opinion","review","readarticle","readall","analyze","analyse": step.action="read"
+        case "library","acrosslibrary","allarticles","searchlibrary","libraryquery","countarticles","acrossarticles","articles","everyarticle","otherarticles":
+            step.action="library"
+            if step.scope == nil && step.titles?.isEmpty == false {step.scope="titles"}
         case "answer","reply","say","chat","respond","talk","none","noop","nothing","": return nil
         default: step.action=raw
+        }
+        // A count or list over a scope of articles is a library question.
+        if ["count","list"].contains(step.action),step.scope != nil || step.titles?.isEmpty == false || step.measure != nil {
+            if step.measure == nil {step.measure=step.action == "list" ? "list" : "articles"}
+            step.action="library"
         }
         return step
     }
@@ -106,6 +134,23 @@ public struct CompanionStep:Codable,Sendable,Equatable {
         case "faster","fast","quicker","quick","speed up","up","increase","hurry": return "faster"
         case "slower","slow","slow down","down","decrease","gentle","calm": return "slower"
         case "normal","default","regular","reset","normal speed","medium": return "normal"
+        default: return PageQuery.fold(raw)
+        }
+    }
+    static func normalizeScope(_ raw:String)->String {
+        switch PageQuery.fold(raw).replacingOccurrences(of:" ",with:"") {
+        case "library","all","allarticles","everything","everywhere","wholelibrary","package","archive","wikipedia","every","everyarticle": return "library"
+        case "linked","links","linkedarticles","linkedfromhere","fromthispage","thispage","outlinks","linkedpages": return "linked"
+        case "titles","title","named","these","list","articles","specific": return "titles"
+        case "search","results","searchresults","about","topic","related": return "search"
+        default: return PageQuery.fold(raw)
+        }
+    }
+    static func normalizeMeasure(_ raw:String)->String {
+        switch PageQuery.fold(raw).replacingOccurrences(of:" ",with:"") {
+        case "articles","count","howmanyarticles","articlecount","number","howmany","mentions": return "articles"
+        case "total","sum","occurrences","times","all","matches","howmanytimes","totalcount": return "total"
+        case "list","which","names","titles","whicharticles","show","rank","ranking","most": return "list"
         default: return PageQuery.fold(raw)
         }
     }
@@ -119,6 +164,14 @@ public struct CompanionStep:Codable,Sendable,Equatable {
         }
     }
 
+    /// The library question this step asks, if it is a library step with a query.
+    public var libraryRequest:LibraryRequest? {
+        guard action == "library",let query else {return nil}
+        let scope=self.scope ?? ((titles ?? []).isEmpty ? "library" : "titles")
+        return LibraryRequest(scope:scope,measure:measure ?? "articles",query:query,section:scope == "linked" ? place : nil,
+                              titles:titles,search:scope == "search" ? (topic ?? place) : nil,articleLimit:articles)
+    }
+
     /// Problems that stop this step from running. Empty means executable.
     public var problems:[String] {
         var issues:[String]=[]
@@ -127,13 +180,17 @@ public struct CompanionStep:Codable,Sendable,Equatable {
             if query == nil && result == nil {issues.append("\(action) needs a query (or a saved result)")}
             issues += (query?.problems ?? []).map {"query: "+$0}
         }
+        if action == "library",result != "more" {
+            if let request=libraryRequest {issues += request.problems}
+            else {issues.append("library needs a query: what to count or find in each article")}
+        }
         issues += (footing?.problems ?? []).map {"footing: "+$0}
         if footing != nil && footing?.isWordLike != true {issues.append("footing must describe words")}
         switch action {
         case "show": if result == nil && query == nil {issues.append("show needs a saved result id")}
         case "go": if place == nil {issues.append("go needs a place")}
         case "follow": if place == nil {issues.append("follow needs the link text in place")}
-        case "open": if title == nil {issues.append("open needs an article title")}
+        case "open": if title == nil && path == nil {issues.append("open needs an article title")}
         case "hunt": if phrase == nil {issues.append("hunt needs a phrase")}
         case "explore": if topic == nil {issues.append("explore needs a topic")}
         case "speed": if !["faster","slower","normal"].contains(speed ?? "") {issues.append("speed must be faster, slower or normal")}
@@ -142,7 +199,7 @@ public struct CompanionStep:Codable,Sendable,Equatable {
             if rule == "avoid" && place == nil {issues.append("rule avoid needs a place")}
         default: break
         }
-        for value in [color,target,place,title,phrase,topic,question].compactMap({$0}) where value.count>500 {
+        for value in [color,target,place,title,phrase,topic,question].compactMap({$0})+(titles ?? []) where value.count>500 {
             issues.append("a field is longer than 500 characters")
         }
         return issues
@@ -252,7 +309,7 @@ extension CompanionPlan {
                 ("notStartsWith",text),("notEndsWith",text),("notContains",text),("exclude",texts),
                 ("minLength",integer),("maxLength",integer),("length",integer),("minWords",integer),("maxWords",integer),
                 ("section",text),("excludeSections",texts),("distinct",boolean),("caseSensitive",boolean),
-                ("order",enumeration(PageQuery.orders)),("rank",integer),("limit",integer),("meaning",text)
+                ("order",enumeration(PageQuery.orders)),("rank",integer),("limit",integer),("meaning",text),("linksTo",text)
             ])),
             ("additionalProperties",.bool(false))
         ])
@@ -270,7 +327,9 @@ extension CompanionPlan {
                 ("result",text),("target",text),("place",text),("title",text),("phrase",text),("topic",text),
                 ("speed",enumeration(["faster","slower","normal"])),
                 ("rule",enumeration(["avoid","stay","allowLinks","clearRules"])),
-                ("question",text)
+                ("question",text),
+                ("scope",enumeration(LibraryRequest.scopes)),("measure",enumeration(LibraryRequest.measures)),
+                ("titles",texts),("articles",integer)
             ])),
             ("required",.array([.string("action")])),
             ("additionalProperties",.bool(false))

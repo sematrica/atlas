@@ -72,7 +72,12 @@ public enum PageQueryEngine {
         case "sentence": candidates=sentences(blocks.filter {!$0.isHeading})
         case "paragraph": candidates=wholeBlocks(blocks.filter {$0.tag == nil ? !$0.isHeading : ["p","blockquote","dd"].contains($0.tag!)})
         case "heading": candidates=wholeBlocks(blocks.filter(\.isHeading))
-        case "link": candidates=elements(page.links,query:query)
+        case "link":
+            candidates=elements(page.links,query:query)
+            if let title=query.linksTo {
+                let pointing=Set(page.links.filter {ArticleLinks.points($0.href,to:title)}.map(\.id))
+                candidates=candidates.filter {$0.elementID.map(pointing.contains) ?? false}
+            }
         case "image": candidates=elements(page.images,query:query)
         case "phrase": candidates=phrases(blocks,query:query)
         default: candidates=[]

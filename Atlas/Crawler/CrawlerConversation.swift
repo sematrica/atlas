@@ -10,6 +10,19 @@ struct CompanionLine:Identifiable {
     var isError=false
     /// Small notes under a reply: "understood instantly", "llama3.1 · 3.2 s", "42 highlighted".
     var trail:[String]=[]
+    /// The articles a library question found, shown under the reply with Open buttons.
+    var library:LibraryLine?
+}
+
+/// A library answer's article list.
+struct LibraryLine {
+    /// Matching articles, most matches first (the first 200).
+    let hits:[LibraryHit]
+    let matchingArticles:Int
+    /// What each Open button highlights in the article it opens.
+    let query:PageQuery
+    /// More articles remain to be read.
+    var canContinue:Bool
 }
 
 /// A colored highlight layer currently painted on the page.
@@ -75,6 +88,8 @@ final class CrawlerConversation {
     @ObservationIgnored private var announcedHunt:String?
     /// A result Atlas just offered to highlight ("Want me to highlight them?").
     @ObservationIgnored private var offeredResult:String?
+    /// The last library question, kept so "check more articles" can continue it.
+    @ObservationIgnored private var libraryRun:LibraryRun?
 
     init(crawler:CrawlerController) {self.crawler=crawler}
 
@@ -218,7 +233,10 @@ final class CrawlerConversation {
 
     private func promptContext(page:CrawlerPageMap?,request:String)->CompanionPromptContext {
         let highlights=layers.map {"\($0.style.label): \($0.label) (\($0.count))"}
-        let saved=results.suffix(8).map {"\($0.id): \(Self.format($0.count)) \($0.label)"}
+        var saved=results.suffix(8).map {"\($0.id): \(Self.format($0.count)) \($0.label)"}
+        if let run=libraryRun,!run.hits.isEmpty {
+            saved.append("library: "+run.ranked.prefix(5).map {"\($0.title) (\($0.count))"}.joined(separator:", ")+(run.isComplete ? "" : "; more articles remain, \"result\":\"more\" continues"))
+        }
         guard let page,crawler?.ready == true else {return CompanionPromptContext(state:spiderState(),highlights:highlights,results:saved)}
         return CompanionPromptContext(page:page,title:companionTitle,request:request,state:spiderState(),highlights:highlights,results:saved)
     }
@@ -263,6 +281,10 @@ final class CrawlerConversation {
         case "follow":
             return try await follow(step.place ?? "",page:page,token:token)
         case "open":
+            if let path=step.path {
+                say("Opening “\(step.title ?? path)”.")
+                return try await navigate(path:path,token:token)
+            }
             return try await open(step.title ?? "",page:page,token:token)
         case "back":
             return try await back(page:page,token:token)
@@ -291,6 +313,8 @@ final class CrawlerConversation {
             applyRule(step,page:page)
         case "read":
             try await read(question:step.question ?? "Summarize the article",page:page,token:token)
+        case "library":
+            try await library(step,page:page,local:local,token:token)
         default:
             say("I don't know how to “\(step.action)” yet.")
         }
@@ -677,6 +701,65 @@ final class CrawlerConversation {
         else {return nil}
         let info=try await provider.info(path:path)
         return info.mimeType.contains("html") ? info.path : nil
+    }
+
+    // MARK: Across the library
+
+    /// Counts or finds across many articles: search proposes candidates, then every
+    /// candidate is read and counted exactly. Long questions stop after a batch and can continue.
+    private func library(_ step:CompanionStep,page:CrawlerPageMap?,local:Bool,token:UUID) async throws {
+        guard let browser=crawler?.intelligence.browser,let record=browser.record,let source=browser.provider as? any LibraryArticleSource else {
+            say("Open a Wikipedia package in Library first.");return
+        }
+        var run:LibraryRun
+        if step.result == "more" {
+            guard let previous=libraryRun,previous.packageID == record.id else {say("There's no library question to continue.");return}
+            guard !previous.isComplete else {say("I've already read every article for that question.");return}
+            run=previous
+        } else {
+            guard let request=step.libraryRequest else {say("What should I count or find in each article?");return}
+            var index:(any LibraryTextIndex)?
+            if request.scope == "library",!request.searchTexts.isEmpty {
+                let fullText=try await source.hasArchiveFullText()
+                if !fullText {index=await browser.libraryTextIndex()}
+            }
+            var current:(id:ArticleID,page:CrawlerPageMap)?
+            if request.scope == "linked" {
+                guard let id=browser.currentArticleID,let page=try await currentPage(page) else {say("Open an article first: I'll read the articles it links to.");return}
+                current=(id,page)
+            }
+            status="Finding the articles to read…"
+            run=try await LibraryEngine.start(request,packageID:record.id,source:source,index:index,current:current)
+        }
+        try checkpoint(token)
+        let line=say(step.result == "more" ? "Reading more articles…" : "Reading articles…")
+        if local {amend(line,trail:"understood instantly")}
+        let began=Date()
+        run=try await LibraryEngine.advance(run,source:source) {@MainActor [weak self] progress in
+            guard let self,token == self.generation else {return}
+            let remaining=progress.remaining.map {", about \(Self.format($0)) to go"} ?? ""
+            self.status="Read \(Self.format(progress.checked)) articles · \(Self.format(progress.hits)) with matches"
+            self.amend(line,text:"Reading articles… \(Self.format(progress.checked)) read\(remaining).")
+        }
+        try checkpoint(token)
+        libraryRun=run
+        amend(line,text:run.answer,trail:String(format:"%.1f s",Date().timeIntervalSince(began)))
+        if let index=lines.firstIndex(where:{$0.id == line}) {
+            lines[index].library=LibraryLine(hits:Array(run.ranked.prefix(200)),matchingArticles:run.hits.count,query:run.request.countingQuery,canContinue:!run.isComplete)
+        }
+    }
+
+    /// Opens an article from a library answer and highlights what was counted there.
+    func openLibraryHit(_ hit:LibraryHit,query:PageQuery) {
+        var open=CompanionStep(action:"open");open.title=hit.title;open.path=hit.path
+        let highlight=CompanionStep(action:"highlight",query:query)
+        run(CompanionPlan(steps:[open,highlight],local:true),saying:"Open “\(hit.title)” and show the matches")
+    }
+    /// Continues the last library question with the next batch of articles.
+    func continueLibrary() {
+        var step=CompanionStep(action:"library");step.result="more"
+        if let index=lines.lastIndex(where:{$0.library?.canContinue == true}) {lines[index].library?.canContinue=false}
+        run(CompanionPlan(steps:[step],local:true),saying:"Check more articles")
     }
 
     // MARK: Crawler modes

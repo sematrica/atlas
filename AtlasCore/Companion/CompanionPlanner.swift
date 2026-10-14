@@ -62,6 +62,7 @@ public enum CompanionPlanner {
     pause | resume | stop. speed: "speed" = faster | slower | normal.
     rule: "rule" = avoid (with "place") | stay (stay in this article) | allowLinks | clearRules.
     read: read the whole article before answering "question" (summaries, opinions, anything the excerpts can't answer).
+    library: count or find across many articles, exactly. "query" = what to look for in each article. "measure" = articles (how many articles contain it) | total (how many times altogether) | list (which articles). "scope" = library (every article; the default) | linked (articles this article links to; "place" = only links in that section) | titles (the articles named in "titles") | search (the best articles about "topic"). "articles" = at most that many from the scope. "result":"more" continues the last library question where it stopped.
 
     QUERY (omit fields you don't need)
     unit: word | letter | character | number | sentence | paragraph | heading | link | image | name | phrase
@@ -72,7 +73,8 @@ public enum CompanionPlanner {
     minLength, maxLength, length: letters for words, characters otherwise. minWords, maxWords: for sentences.
     section: only this section ("introduction" = the lead). excludeSections: sections to skip.
     distinct: true counts each spelling once. order: first | last | longest | shortest | frequent | rare, with rank (2 = second) or limit (how many).
-    meaning: a semantic condition you must judge ("related to music", "of French origin"). Use only when spelling and grammar can't express it.
+    meaning: a semantic condition you must judge ("related to music", "of French origin"). Use only when spelling and grammar can't express it. Never in library steps.
+    linksTo (unit link): the title of the article a link points to, whatever the link says.
     One punctuation mark is a character with equals: periods/dots = {"unit":"character","equals":"."}. Capital letters = {"unit":"letter","letterCase":"uppercase"}. A word or phrase to count = {"unit":"phrase","equals":"..."}.
 
     EXAMPLES
@@ -92,6 +94,14 @@ public enum CompanionPlanner {
     {"steps":[{"action":"list","query":{"unit":"word","order":"frequent","exclude":["the","of"]}}],"reply":"Let me tally them."}
     User: walk over to the Early life part
     {"steps":[{"action":"go","place":"Early life"}],"reply":"Heading there."}
+    User: how many articles mention Atlantic Records?
+    {"steps":[{"action":"library","measure":"articles","query":{"unit":"phrase","equals":"Atlantic Records"}}],"reply":"I'll check every article that mentions it."}
+    User: which articles link to Paris?
+    {"steps":[{"action":"library","measure":"list","query":{"unit":"link","linksTo":"Paris"}}],"reply":"Looking through the library for links to Paris."}
+    User: count jazz in the albums listed in the Discography section
+    {"steps":[{"action":"library","scope":"linked","place":"Discography","measure":"total","query":{"unit":"word","equals":"jazz"}}],"reply":"I'll read each album's article."}
+    User: how many times is "soul" used in Ray Charles, Aretha Franklin and Sam Cooke?
+    {"steps":[{"action":"library","scope":"titles","titles":["Ray Charles","Aretha Franklin","Sam Cooke"],"measure":"total","query":{"unit":"word","equals":"soul"}}],"reply":"Reading all three."}
     User: open the article on Paris and count its links
     {"steps":[{"action":"open","title":"Paris"},{"action":"count","query":{"unit":"link"}}],"reply":"Opening Paris first."}
     User: when was he born?

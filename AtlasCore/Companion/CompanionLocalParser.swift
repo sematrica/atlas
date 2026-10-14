@@ -16,6 +16,8 @@ public enum CompanionLocalParser {
         if let plan=control(cursor.rest) {return plan}
         if let plan=goPlace(&cursor) {return plan}
         cursor.i=0
+        if let plan=libraryRequest(&cursor,original:request) {return plan}
+        cursor.i=0
         return taskRequest(&cursor)
     }
 
@@ -146,6 +148,122 @@ public enum CompanionLocalParser {
         guard let last=words.last,["section","part","chapter","heading"].contains(last),words.count>=2,words.count<=8 else {cursor.i=start;return nil}
         var step=CompanionStep(action:"go");step.place=words.dropLast().joined(separator:" ")
         return .init(steps:[step],local:true)
+    }
+
+    // MARK: Across the library
+
+    static let articleWords:Set<String>=["articles","article","pages","page","entries","entry"]
+    /// Verb → mention or link.
+    static let libraryVerbs:[[String]:String]=[
+        ["mention"]:"mention",["mentions"]:"mention",["mentioning"]:"mention",["mentioned"]:"mention",
+        ["contain"]:"mention",["contains"]:"mention",["containing"]:"mention",["include"]:"mention",["includes"]:"mention",["including"]:"mention",
+        ["use"]:"mention",["uses"]:"mention",["using"]:"mention",["talk","about"]:"mention",["talks","about"]:"mention",["talking","about"]:"mention",
+        ["refer","to"]:"mention",["refers","to"]:"mention",["referring","to"]:"mention",["have","the","word"]:"mention",["have","the","phrase"]:"mention",
+        ["with","the","word"]:"mention",["with","the","phrase"]:"mention",["say"]:"mention",["says"]:"mention",
+        ["link","to"]:"link",["links","to"]:"link",["linking","to"]:"link",["point","to"]:"link",["points","to"]:"link",["pointing","to"]:"link",["have","a","link","to"]:"link",["have","links","to"]:"link",["with","links","to"]:"link"
+    ]
+    static let libraryScopes:[[String]]=[["in","the","library"],["in","my","library"],["in","the","whole","library"],["in","the","entire","library"],["across","the","library"],["across","my","library"],["across","the","whole","library"],
+                                         ["in","all","articles"],["in","all","the","articles"],["across","all","articles"],["across","all","the","articles"],["in","every","article"],["in","each","article"],
+                                         ["in","this","package"],["in","the","package"],["in","the","archive"],["in","the","whole","archive"],["in","wikipedia"],["in","all","of","wikipedia"],["everywhere"],["in","the","library","overall"]]
+    static let linkedScopes:[[String]]=[["in","the","linked","articles"],["in","the","linked","pages"],["in","linked","articles"],
+                                        ["in","the","articles","linked","from","this","page"],["in","the","articles","linked","from","here"],["in","the","articles","linked","from","this","article"],
+                                        ["in","articles","linked","from","this","page"],["in","articles","linked","from","here"],["in","the","pages","linked","from","here"],["in","the","pages","linked","from","this","page"],
+                                        ["in","the","articles","this","page","links","to"],["in","the","articles","this","article","links","to"]]
+    static let continueLibrary:Set<String>=["check more articles","check more","keep counting","keep checking","continue counting","continue checking","keep going through the library",
+                                            "read more articles","check the rest","count the rest","check the remaining articles","continue the library search","more articles"]
+
+    /// "how many articles mention Atlantic Records", "which articles link to Paris",
+    /// "how many times does jazz appear in the library", "count soul in the linked articles".
+    static func libraryRequest(_ cursor:inout Cursor,original request:String)->CompanionPlan? {
+        if continueLibrary.contains(cursor.rest) {
+            var step=CompanionStep(action:"library");step.result="more"
+            return .init(steps:[step],local:true)
+        }
+        var measure:String
+        var verb:String?
+        if cursor.accept(sequence:["what","links","to"]) || cursor.accept(sequence:["what","link","to"]) {
+            measure="list";verb="link"
+        } else if cursor.accept(sequence:["how","many","times"]) {
+            measure="total"
+        } else if cursor.accept(sequence:["how","many"]) {
+            guard cursor.accept(articleWords) != nil else {return nil}
+            measure="articles"
+        } else if cursor.accept(["which","what"]) != nil {
+            guard cursor.accept(articleWords) != nil else {return nil}
+            measure="list"
+        } else if cursor.accept(sequence:["list"]) || cursor.accept(sequence:["find"]) || cursor.accept(sequence:["show","me"]) || cursor.accept(sequence:["give","me"]) {
+            cursor.skip(["the","all","every","any"])
+            guard cursor.accept(articleWords) != nil else {return nil}
+            measure="list"
+        } else if cursor.accept(sequence:["count"]) {
+            measure="total"
+        } else {return nil}
+
+        var scope:String?
+        var section:String?
+        func acceptScope(_ cursor:inout Cursor)->Bool {
+            for words in libraryScopes.sorted(by:{$0.count>$1.count}) where cursor.accept(sequence:words) {scope="library";return true}
+            for words in linkedScopes.sorted(by:{$0.count>$1.count}) where cursor.accept(sequence:words) {scope="linked";return true}
+            // "in the articles linked in/from the Discography section"
+            let start=cursor.i
+            if cursor.accept("in") {
+                cursor.skip(["the"])
+                if cursor.accept(["articles","pages"]) != nil,cursor.accept("linked") {
+                    if cursor.accept(["in","from","under"]) != nil {
+                        cursor.skip(["the"])
+                        var words:[String]=[]
+                        while let word=cursor.peek(),word != "section" {words.append(word);cursor.i += 1}
+                        if !words.isEmpty,cursor.accept("section") {scope="linked";section=original(words.joined(separator:" "),in:request);return true}
+                    }
+                }
+            }
+            cursor.i=start
+            return false
+        }
+        // "how many articles in the library mention…"
+        _ = acceptScope(&cursor)
+        if measure != "total",verb == nil {
+            cursor.skip(["that","which","who"])
+            for (words,kind) in libraryVerbs.sorted(by:{$0.key.count>$1.key.count}) where cursor.accept(sequence:words) {verb=kind;break}
+            guard verb != nil else {return nil}
+        } else if measure == "total" {
+            cursor.skip(["does","do","is","are","did","was","the","word","phrase","name","term"])
+        }
+        // The subject runs to the scope (or the end); for "how many times", to its verb.
+        var subject:[Token]=[]
+        let appearVerbs:Set<String>=["appear","appears","occur","occurs","mentioned","used","written"]
+        while !cursor.done {
+            if acceptScope(&cursor) {break}
+            if measure == "total",verb == nil,let word=cursor.peek(),cursor.token()?.quoted == false,appearVerbs.contains(word) {
+                cursor.i += 1;cursor.skip(["up"])
+                _ = acceptScope(&cursor)
+                break
+            }
+            subject.append(cursor.token()!);cursor.i += 1
+        }
+        guard cursor.done,!subject.isEmpty,subject.count<=8 else {return nil}
+        // A bare "in", "from" or "section" in the subject means a scope we didn't understand.
+        if subject.contains(where:{!$0.quoted && ["in","from","section","on","within","inside"].contains($0.text)}) {return nil}
+        // "count jazz" alone is a page question; across articles needs a scope.
+        if measure == "total",scope == nil {return nil}
+        let text=original(subject.map(\.text).joined(separator:" "),in:request)
+        var query:PageQuery
+        if verb == "link" {query=PageQuery(unit:"link");query.linksTo=text}
+        else {query=PageQuery(unit:"word");query.equals=text}
+        let normalized=query.normalized()
+        guard normalized.problems.isEmpty else {return nil}
+        var step=CompanionStep(action:"library",query:normalized)
+        step.measure=measure
+        step.scope=scope ?? "library"
+        step.place=section
+        return .init(steps:[step],local:true)
+    }
+
+    /// The user's own spelling of a phrase that was lowercased for parsing ("atlantic records" → "Atlantic Records").
+    static func original(_ lowered:String,in request:String)->String {
+        let request=request.replacingOccurrences(of:"’",with:"'").replacingOccurrences(of:"‘",with:"'")
+        if let range=request.range(of:lowered,options:[.caseInsensitive]) {return String(request[range])}
+        return lowered
     }
 
     // MARK: Find, count, list, go to

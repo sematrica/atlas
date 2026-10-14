@@ -45,13 +45,15 @@ public struct PageQuery: Codable, Sendable, Equatable {
     public var limit: Int?
     /// A semantic condition judged by the language model, e.g. "related to music".
     public var meaning: String?
+    /// Links only: the title of the article the link points to ("Paris").
+    public var linksTo: String?
 
     public init(unit:String?=nil) {self.unit=unit}
 
     enum CodingKeys:String,CodingKey {
         case unit,startsWith,endsWith,contains,equals,notStartsWith,notEndsWith,notContains,exclude
         case partOfSpeech,entity,letterCase,characterClass,minLength,maxLength,length,minWords,maxWords
-        case section,excludeSections,distinct,caseSensitive,order,rank,limit,meaning
+        case section,excludeSections,distinct,caseSensitive,order,rank,limit,meaning,linksTo
     }
 
     /// Small local models sometimes return numbers as strings, a single string
@@ -84,6 +86,7 @@ public struct PageQuery: Codable, Sendable, Equatable {
         rank=c.lenientInt(.rank)
         limit=c.lenientInt(.limit)
         meaning=c.lenientString(.meaning)
+        linksTo=c.lenientString(.linksTo)
     }
 
     public static let units=["word","letter","character","number","sentence","paragraph","heading","link","image","name","phrase"]
@@ -111,9 +114,10 @@ extension PageQuery {
     /// executable vocabulary. Unknown values are kept so validation can explain them.
     public func normalized()->PageQuery {
         var q=self
-        for key in [\PageQuery.startsWith,\.endsWith,\.contains,\.equals,\.notStartsWith,\.notEndsWith,\.notContains,\.section,\.meaning] {
+        for key in [\PageQuery.startsWith,\.endsWith,\.contains,\.equals,\.notStartsWith,\.notEndsWith,\.notContains,\.section,\.meaning,\.linksTo] {
             if let value=q[keyPath:key],value.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty {q[keyPath:key]=nil}
         }
+        if let value=q.linksTo {q.linksTo=Self.stripQuotes(value.trimmingCharacters(in:.whitespacesAndNewlines));if q.unit == nil {q.unit="link"}}
         // Quotes a model copies from the request ("'a'") are not part of the spelling.
         for key in [\PageQuery.startsWith,\.endsWith,\.contains,\.equals,\.notStartsWith,\.notEndsWith,\.notContains] {
             if let value=q[keyPath:key] {q[keyPath:key]=Self.stripQuotes(value)}
@@ -313,6 +317,7 @@ extension PageQuery {
         }
         if let order,!Self.orders.contains(order) {issues.append("unknown order “\(order)”")}
         if unit == "phrase",equals == nil {issues.append("a phrase search needs the text to find in equals")}
+        if linksTo != nil && unit != "link" {issues.append("linksTo only applies to links")}
         for (name,value) in [("rank",rank),("limit",limit)] {
             if let value,value>100_000 {issues.append("\(name) is too large")}
         }
@@ -320,7 +325,7 @@ extension PageQuery {
             if let value,value>10_000 {issues.append("\(name) is too large")}
         }
         if let minLength,let maxLength,minLength>maxLength {issues.append("minLength is greater than maxLength")}
-        for value in [startsWith,endsWith,contains,equals,notStartsWith,notEndsWith,notContains,section,meaning].compactMap({$0}) where value.count>300 {
+        for value in [startsWith,endsWith,contains,equals,notStartsWith,notEndsWith,notContains,section,meaning,linksTo].compactMap({$0}) where value.count>300 {
             issues.append("a text condition is longer than 300 characters")
         }
         if (exclude ?? []).count>200 {issues.append("too many excluded words")}
@@ -344,6 +349,7 @@ extension PageQuery {
         if let value=q.notStartsWith {conditions.append("not starting with \(quoted(value))")}
         if let value=q.notEndsWith {conditions.append("not ending with \(quoted(value))")}
         if let value=q.notContains {conditions.append("without \(quoted(value))")}
+        if let value=q.linksTo {conditions.append("to “\(value)”")}
         let measure=q.isWordLike ? "letters" : "characters"
         if let length=q.length {conditions.append("with exactly \(length) \(measure)")}
         else if let minLength=q.minLength,let maxLength=q.maxLength {conditions.append("with \(minLength)–\(maxLength) \(measure)")}

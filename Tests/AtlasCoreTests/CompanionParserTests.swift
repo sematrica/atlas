@@ -178,3 +178,61 @@ final class CompanionPlanTests:XCTestCase {
         XCTAssertLessThan(json.range(of:"\"unit\"")!.lowerBound,json.range(of:"\"startsWith\"")!.lowerBound)
     }
 }
+
+final class LibraryParserTests:XCTestCase {
+    private func library(_ request:String,file:StaticString=#filePath,line:UInt=#line)->CompanionStep? {
+        let plan=CompanionLocalParser.parse(request)
+        XCTAssertEqual(plan?.steps.first?.action,"library","“\(request)” should be a library question",file:file,line:line)
+        XCTAssertEqual(plan?.local,true,file:file,line:line)
+        return plan?.steps.first
+    }
+
+    func testTheUsersExamples() {
+        let a=library("how many articles mention Atlantic Records")
+        XCTAssertEqual(a?.measure,"articles");XCTAssertEqual(a?.scope,"library")
+        XCTAssertEqual(a?.query?.unit,"phrase");XCTAssertEqual(a?.query?.equals,"Atlantic Records","the user's own capitalization")
+
+        let b=library("Which articles link to Paris?")
+        XCTAssertEqual(b?.measure,"list");XCTAssertEqual(b?.query?.unit,"link");XCTAssertEqual(b?.query?.linksTo,"Paris")
+
+        let c=library("count jazz in the articles linked in the Discography section")
+        XCTAssertEqual(c?.measure,"total");XCTAssertEqual(c?.scope,"linked");XCTAssertEqual(c?.place,"Discography")
+        XCTAssertEqual(c?.query?.unit,"word","one word is matched as a whole word");XCTAssertEqual(c?.query?.equals,"jazz")
+    }
+
+    func testOtherPhrasings() {
+        XCTAssertEqual(library("how many times does \"soul\" appear in the library")?.measure,"total")
+        XCTAssertEqual(library("how many times is jazz mentioned across all articles")?.query?.equals,"jazz")
+        XCTAssertEqual(library("what links to Atlantic Records")?.query?.linksTo,"Atlantic Records")
+        XCTAssertEqual(library("list the articles that contain blues")?.measure,"list")
+        XCTAssertEqual(library("how many articles in the library talk about gospel")?.query?.equals,"gospel")
+        XCTAssertEqual(library("count the word soul in the linked articles")?.scope,"linked")
+        XCTAssertEqual(library("check more articles")?.result,"more")
+        XCTAssertNotNil(library("how many articles link to Ray Charles")?.libraryRequest)
+    }
+
+    func testPageQuestionsStayOnThePage() {
+        // Without a scope these are about the open article, not the library.
+        XCTAssertNotEqual(CompanionLocalParser.parse("how many links in this article")?.steps.first?.action,"library")
+        XCTAssertNotEqual(CompanionLocalParser.parse("count jazz")?.steps.first?.action,"library","a bare count is never a library question")
+        XCTAssertNil(CompanionLocalParser.parse("how many articles mention jazz in the Career section"),"an unclear scope goes to the model")
+        XCTAssertNotEqual(CompanionLocalParser.parse("how many articles are there")?.steps.first?.action,"library","grammatical articles on the page")
+    }
+
+    func testPlansFromAModel() throws {
+        let raw=#"{"steps":[{"action":"count","scope":"all articles","query":{"unit":"phrase","equals":"Atlantic Records"}}],"reply":"Checking."}"#
+        let plan=try XCTUnwrap(CompanionPlan.decode(raw)).normalized()
+        XCTAssertEqual(plan.steps.first?.action,"library","a count over a scope becomes a library step")
+        XCTAssertEqual(plan.steps.first?.scope,"library")
+        XCTAssertEqual(plan.steps.first?.measure,"articles")
+        XCTAssertTrue(plan.problems.isEmpty,plan.problems.joined(separator:"; "))
+        let titles=#"{"steps":[{"action":"library","titles":["Ray Charles","Sam Cooke"],"measure":"times","query":{"unit":"word","equals":"soul"}}],"reply":"Reading both."}"#
+        let step=try XCTUnwrap(CompanionPlan.decode(titles)?.normalized().steps.first)
+        XCTAssertEqual(step.libraryRequest?.scope,"titles")
+        XCTAssertEqual(step.libraryRequest?.measure,"total")
+        let bad=#"{"steps":[{"action":"library","measure":"articles","query":{"unit":"word","meaning":"about music"}}],"reply":"x"}"#
+        XCTAssertFalse(try XCTUnwrap(CompanionPlan.decode(bad)).normalized().problems.isEmpty,"meaning can't run across the library")
+        XCTAssertTrue(CompanionPlan.schemaJSON.contains("\"linksTo\""))
+        XCTAssertTrue(CompanionPlan.schemaJSON.contains("\"measure\""))
+    }
+}

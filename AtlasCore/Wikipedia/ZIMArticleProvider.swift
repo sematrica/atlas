@@ -2,7 +2,7 @@ import Foundation
 import ZIMBridge
 
 /// An actor confines libzim's non-thread-safe suggestion searcher.
-public actor ZIMArticleProvider: ResearchArticleProvider {
+public actor ZIMArticleProvider: ResearchArticleProvider, LibraryArticleSource {
     private let access: LibraryAccess
     private let packageID: String
     private let handle: AZArchive
@@ -63,6 +63,15 @@ public actor ZIMArticleProvider: ResearchArticleProvider {
         guard az_fulltext(handle,query,Int32(min(100,max(1,limit))),&rows,&count,&error) != 0 else {throw AtlasError.searchUnavailable}
         guard let rows else {return []}
         return (0..<Int(count)).map {SearchResult(articleID:.init(packageID:packageID,path:String(cString:rows[$0].path)),title:String(cString:rows[$0].title),excerpt:"")}
+    }
+    /// One page of the built-in full-text search, with libzim's estimate of all matches.
+    public func fullTextPage(_ query:String,offset:Int,limit:Int) async throws -> LibraryFullTextPage {
+        try access.validate();try Task.checkCancellation()
+        var rows:UnsafeMutablePointer<AZMatch>?;var count:Int32=0;var estimated:Int32=0;var error:UnsafeMutablePointer<CChar>?
+        defer {az_matches_free(rows,count);az_free(error)}
+        guard az_fulltext_page(handle,query,Int32(min(max(0,offset),Int(Int32.max))),Int32(min(500,max(1,limit))),&rows,&count,&estimated,&error) != 0 else {throw AtlasError.searchUnavailable}
+        let results=rows.map {p in (0..<Int(count)).map {SearchResult(articleID:.init(packageID:packageID,path:String(cString:p[$0].path)),title:String(cString:p[$0].title),excerpt:"")}} ?? []
+        return .init(results:results,estimated:Int(estimated))
     }
     public func articleBatch(offset:UInt64) async throws -> ArchiveArticleBatch {
         try access.validate();try Task.checkCancellation()
