@@ -23,6 +23,8 @@ This branch replaces Codex's companion pipeline and reworks the crawler's moveme
 | Executor: runs each step with the spider (tours, sweeps, navigation, hunts, rules) | `Atlas/Crawler/CrawlerConversation.swift` (rewritten) |
 | Highlight layers that survive reflow; tags and sections in the page map | `Atlas/Crawler/DocumentGeometryScript.swift` |
 | Companion panel: trails, legend, Finish now, fit badge; constellation theme (night background, thread of nodes, orange core, the app icon's creature as emblem) and the toolbar's Companion button | `Atlas/Crawler/CrawlerControls.swift`, `Atlas/UI/BrowserView.swift`, `Atlas/Assets.xcassets/SematricaEmblem.imageset` |
+| Connect the dots: shortest chain of links between two articles (outward search plus stepping stones from search, provably shortest when a level is fully read, resumable) | `AtlasCore/Companion/ArticleConnection.swift`; redirects resolved from the directory alone by `az_resolve_paths` / `ZIMArticleProvider.resolve(paths:)` |
+| Connect in the companion: `connect` step, phrasings, the spider walking the route, the constellation map and its image | `CompanionPlan.swift`, `CompanionPlanner.swift`, `CompanionLocalParser.swift`, `CrawlerConversation.swift`, `CrawlerControls.swift` (`ConnectionCard`, `ConnectionMap`, `ConnectionPoster`) |
 | Fit meter in Ask | `Atlas/Intelligence/IntelligenceModel.swift`, `IntelligenceView.swift` |
 
 Removed: `AtlasCore/Crawler/CrawlerCompanion.swift` (regex guards, fixed tool menu), `AtlasCore/Crawler/CrawlerIntent.swift` and most of `CrawlerCommands.swift` (the old "Talk to crawler" path, no longer wired to any UI), and their tests and docs.
@@ -35,7 +37,7 @@ No new app-target files were added, so `Atlas.xcodeproj` needs no changes. New A
 
 ## Already verified in the container
 
-- **61 AtlasCore unit tests pass** (Swift 6.0.3 on Linux): `PageQueryTests`, `CompanionParserTests` (including the user's own example requests), `HighlightStyleTests`, `CompanionPlanTests`, `CompanionPlannerTests` (scripted model: one call, repair, rejected steps, semantic filter, fit scoring), `CrawlerTests`, `CrawlerMotionTests`, `CrawlerPageTests`, `CrawlerCommandTests`. Linux has no NaturalLanguage framework, so a small stand-in tagger was used; part-of-speech and name results on macOS come from Apple's tagger and may differ slightly.
+- **91 AtlasCore unit tests pass** (Swift 6.0.3 on Linux): `PageQueryTests`, `CompanionParserTests` (including the user's own example requests), `HighlightStyleTests`, `CompanionPlanTests`, `CompanionPlannerTests` (scripted model: one call, repair, rejected steps, semantic filter, fit scoring), `CrawlerTests`, `CrawlerMotionTests`, `CrawlerPageTests`, `CrawlerCommandTests`, `ArticlePageMapTests`, `LibraryQueryTests`, `LibraryParserTests`, `ArticleConnectionTests` (direct links, proven two- and three-link chains, stepping stones through redirects, shorter chains preferred, no search index, stopping and resuming, unproven chains, no connection, the open article, "the Moon") and `ConnectParserTests`. A connection search was also run on a synthetic 20,000-article library: proven-shortest three-link chains after reading 80–180 articles, in under half a second. Linux has no NaturalLanguage framework, so a small stand-in tagger was used; part-of-speech and name results on macOS come from Apple's tagger and may differ slightly.
 - `OllamaProvider.swift` type-checks (against a shim for `URLSession.AsyncBytes`).
 - `CrawlerConversation.swift`, `CrawlerController.swift`, `CrawlerIntelligence.swift`, `DocumentGeometryScript.swift` and `CrawlerRenderer.swift` compile without errors or warnings under complete strict-concurrency checking, against stand-ins for WebKit, AppKit, CoreGraphics and `BrowserModel`.
 - `ZIMArticleProvider.swift` and `ResearchStore.swift` compile against the real bridge header and SQLite (with do-nothing bridge functions), and the library phrase lookup was run against a real SQLite FTS5 index. The new bridge function passes `clang++ -fsyntax-only` against the vendored libzim headers.
@@ -66,9 +68,9 @@ Scripts/test-browser.sh
 ATLAS_BUILD_DIR=/tmp/AtlasStage2Build Scripts/test-layout.sh
 ```
 
-`az_fulltext_page` in `Native/ZIMBridge/ZIMBridge.cpp` is new native code: check it links and that a library question in a ZIM with a full-text index pages past 100 results.
+`az_fulltext_page` and `az_resolve_paths` in `Native/ZIMBridge/ZIMBridge.cpp` are new native code: check they link, that a library question in a ZIM with a full-text index pages past 100 results, and that a connection through a redirect link is found.
 
-Places most likely to need a compile fix, in order: `CrawlerControls.swift` (new `HighlightLegend`, `FitBadge`, `Color(hex:)`, and the constellation theme: `ThreadNode`, `ConstellationEmblem`, `ConstellationBackdrop`, `CompanionToolbarLabel`), `IntelligenceView.swift` (`CompanionFitRow`), `CrawlerRenderer.swift` (knee, foot, creature-look and touch-box drawing; it was type-checked here against stand-ins for AppKit and CoreGraphics), `BrowserSmoke.swift`.
+Places most likely to need a compile fix, in order: `CrawlerControls.swift` (new `HighlightLegend`, `FitBadge`, `Color(hex:)`, the constellation theme: `ThreadNode`, `ConstellationEmblem`, `ConstellationBackdrop`, `CompanionToolbarLabel`, and the connection views: `ConnectionCard`, `ConnectionMap`, `ConnectionPoster` with `ImageRenderer` and `NSSavePanel`), `IntelligenceView.swift` (`CompanionFitRow`), `CrawlerRenderer.swift` (knee, foot, creature-look and touch-box drawing; it was type-checked here against stand-ins for AppKit and CoreGraphics), `BrowserSmoke.swift`.
 
 ## Manual acceptance on the Mac
 
@@ -90,7 +92,12 @@ With `llama3.1:latest` selected in Ask (the badge should read **Medium?** until 
    - Click an article in the list: it should open and highlight the matches. Try **Copy list**.
    - On a large package, `how many articles mention the` should stop after 2,000 articles and offer **Check more articles**.
    - In a package without a built-in index, build part of the text index under Research and check the answer says the index isn't finished.
-5. Companion look: the panel should be dark in both light and dark mode, with the app icon's creature in the header (its orange core breathing while a reply is in progress), messages strung on a thin thread of light, orange accents for Sematrica's name, links and the send button, and readable text everywhere (check the text field, the legend and the manual-tools popover). The toolbar's **Companion** button should show the same creature, small, on a dark capsule whose edge glows orange while the panel is open. The Dock, Finder and About window should show the new icon (if the Dock keeps an old one, quit the app, run `killall Dock` and relaunch).
+5. Connect the dots (in a package with a built-in full-text index, then one without):
+   - `how is Ray Charles connected to Paris` · `connect this to the Moon` · `find the shortest path from Jazz to Tokyo` · `how are Paris and Tokyo linked`
+   - The answer should give the chain and say whether it's the shortest. The spider should open the first article, walk to the link that leads on, light it orange, follow it, and so on to the destination, while the map's threads glow. Check a chain whose link goes through a redirect (the map says "via …").
+   - **Walk it**, **Copy image** (paste into Preview or Notes) and **Save image…**. With "stay in this article" on, the chain should be found but not walked.
+   - A faraway pair should stop after 2,000 articles with **Keep looking**.
+6. Companion look: the panel should be dark in both light and dark mode, with the app icon's creature in the header (its orange core breathing while a reply is in progress), messages strung on a thin thread of light, orange accents for Sematrica's name, links and the send button, and readable text everywhere (check the text field, the legend and the manual-tools popover). The toolbar's **Companion** button should show the same creature, small, on a dark capsule whose edge glows orange while the panel is open. The Dock, Finder and About window should show the new icon (if the Dock keeps an old one, quit the app, run `killall Dock` and relaunch).
 
 ## Known limits and ideas for next steps
 

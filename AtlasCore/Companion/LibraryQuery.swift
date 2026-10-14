@@ -112,6 +112,9 @@ public protocol LibraryArticleSource:Sendable {
     /// The built-in full-text search, page by page.
     func fullTextPage(_ query:String,offset:Int,limit:Int) async throws -> LibraryFullTextPage
     func articleBatch(offset:UInt64) async throws -> ArchiveArticleBatch
+    /// The article each path leads to after redirects, keyed by the path asked for.
+    /// Paths that aren't articles are left out. Reads only the directory, never article text.
+    func resolve(paths:[String]) async throws -> [String:SearchResult]
 }
 
 /// The local text index (Research → Build Text Index).

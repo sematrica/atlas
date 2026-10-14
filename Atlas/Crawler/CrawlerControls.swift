@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 import AtlasCore
 
 struct CrawlerControls:View {
@@ -60,7 +61,7 @@ struct CompanionPanel:View {
     @Bindable var crawler:CrawlerController
     @State private var manual=false
     @State private var expandedLibrary:Set<UUID>=[]
-    private let suggestions=["Highlight the adjectives in green","How many links are on this page?","Take me to the longest word","What is this article about?","How many articles mention jazz?"]
+    private let suggestions=["Highlight the adjectives in green","How many links are on this page?","Take me to the longest word","What is this article about?","How many articles mention jazz?","How is this connected to the Moon?"]
     var body:some View {
         VStack(spacing:0) {
             HStack(spacing:12) {
@@ -128,6 +129,7 @@ struct CompanionPanel:View {
                                         }.font(.system(size:12)).foregroundStyle(Constellation.core).buttonStyle(.plain)
                                     }
                                 }
+                                if let connection=line.connection {ConnectionCard(connection:connection,lineID:line.id,conversation:conversation)}
                             }
                             .frame(maxWidth:.infinity,alignment:.leading)
                             .padding(line.user ? 12 : 0)
@@ -398,5 +400,196 @@ struct LibraryHitList:View {
             .font(.system(size:10)).buttonStyle(.plain).foregroundStyle(Constellation.core)
         }
         .padding(.top,2)
+    }
+}
+
+// MARK: - Connect the dots
+
+/// A connection under its reply: the constellation map and what can be done with it.
+struct ConnectionCard:View {
+    let connection:ConnectionLine
+    let lineID:UUID
+    let conversation:CrawlerConversation
+    var body:some View {
+        VStack(alignment:.leading,spacing:8) {
+            ConnectionMap(connection:connection)
+                .frame(height:ConnectionMap.height(for:connection))
+                .constellationCard(radius:10)
+            HStack(spacing:14) {
+                if connection.found,connection.chain.count>1,!connection.walking,!conversation.busy {
+                    Button("Walk it") {conversation.walkConnection(lineID)}.help("Walk the route again from the first article")
+                }
+                if connection.canContinue,!conversation.busy {Button("Keep looking",action:conversation.continueConnection)}
+                if connection.found,connection.chain.count>1 {
+                    Button("Copy image") {ConnectionPoster.copy(connection)}.help("Copy the map as a picture")
+                    Button("Save image…") {ConnectionPoster.save(connection)}
+                }
+            }
+            .font(.system(size:10)).buttonStyle(.plain).foregroundStyle(Constellation.core)
+        }
+        .padding(.top,2)
+    }
+}
+
+/// A chain of links drawn as a constellation: each article a star on a thread of light, the start
+/// ringed and the destination an orange core. Faint stars stand for the articles read on the way.
+/// While the spider walks the route, the threads it has crossed glow orange.
+struct ConnectionMap:View {
+    let connection:ConnectionLine
+    var animated=true
+    static let row:CGFloat=36
+    static let inset:CGFloat=8
+    static let starX:CGFloat=24
+    static let labelX:CGFloat=46
+    static func height(for connection:ConnectionLine)->CGFloat {CGFloat(max(2,connection.chain.count))*row+inset*2}
+
+    var body:some View {
+        TimelineView(.animation(minimumInterval:1.0/30,paused:!animated || !(connection.walking || !connection.found))) {timeline in
+            let time=timeline.date.timeIntervalSinceReferenceDate
+            ZStack(alignment:.topLeading) {
+                Canvas {context,size in draw(&context,size:size,time:animated ? time : 0)}
+                VStack(alignment:.leading,spacing:0) {
+                    ForEach(Array(connection.chain.enumerated()),id:\.offset) {index,stop in
+                        VStack(alignment:.leading,spacing:2) {
+                            Text(stop.title).font(.system(size:12,weight:index == 0 || index == connection.chain.count-1 ? .semibold : .regular))
+                                .foregroundStyle(connection.walking && connection.reached == index ? Constellation.core : .white.opacity(0.9)).lineLimit(1)
+                            if let note=note(index) {Text(note).font(.system(size:9,design:.monospaced)).foregroundStyle(Constellation.faint).lineLimit(1)}
+                        }
+                        .frame(height:Self.row,alignment:.leading)
+                    }
+                }
+                .padding(.leading,Self.labelX).padding(.trailing,10).padding(.vertical,Self.inset)
+            }
+        }
+        .accessibilityElement(children:.combine)
+    }
+
+    /// The small line under a title: where the walk starts and ends, and the redirect a link went through.
+    func note(_ index:Int)->String? {
+        let stop=connection.chain[index],last=connection.chain.count-1
+        if index == 0 {return "start"}
+        if index == last && !connection.found {return "not connected yet · \(CrawlerConversation.format(connection.read)) read"}
+        if let via=stop.via {
+            let named=ArticleLinks.destinationTitle(via)
+            if named.compare(stop.title,options:[.caseInsensitive,.diacriticInsensitive]) != .orderedSame {return "via “\(named)”"}
+        }
+        return index == last ? "destination" : nil
+    }
+
+    func point(_ index:Int)->CGPoint {
+        CGPoint(x:Self.starX+CGFloat(sin(Double(index)*2.1))*8,y:Self.inset+CGFloat(index)*Self.row+Self.row/2)
+    }
+
+    func draw(_ context:inout GraphicsContext,size:CGSize,time:Double) {
+        let count=connection.chain.count,last=count-1
+        // The articles read on the way, as a faint scatter on the right, the same each time.
+        var seed:UInt64=1469598103934665603
+        for byte in ((connection.chain.first?.path ?? "")+"→"+(connection.chain.last?.path ?? "")).utf8 {seed=(seed ^ UInt64(byte)) &* 1099511628211}
+        func random()->Double {seed=seed &* 6364136223846793005 &+ 1442695040888963407;return Double(seed>>11)/Double(1<<53)}
+        for _ in 0..<min(120,12+connection.read/18) {
+            let x=size.width*(0.5+0.48*random()),y=4+(size.height-8)*random(),r=0.5+random()*0.9
+            context.fill(Path(ellipseIn:CGRect(x:x-r,y:y-r,width:r*2,height:r*2)),with:.color(.white.opacity(0.05+0.14*random())))
+        }
+        // Threads of light between the stops.
+        for index in 0..<max(0,last) {
+            var path=Path();path.move(to:point(index));path.addLine(to:point(index+1))
+            if !connection.found {
+                context.stroke(path,with:.color(.white.opacity(0.25)),style:StrokeStyle(lineWidth:1,dash:[2,4],dashPhase:CGFloat(-time*8)))
+                continue
+            }
+            let crossed=(connection.reached ?? -1)>index
+            context.drawLayer {layer in
+                layer.addFilter(.shadow(color:(crossed ? Constellation.core : .white).opacity(0.7),radius:crossed ? 4 : 2))
+                layer.stroke(path,with:.color(crossed ? Constellation.core : .white.opacity(0.45)),lineWidth:crossed ? 1.4 : 1)
+            }
+            // A spark travels the thread the spider is crossing.
+            if connection.walking,connection.reached == index {
+                let f=CGFloat((time*0.7).truncatingRemainder(dividingBy:1)),a=point(index),b=point(index+1)
+                let spark=CGPoint(x:a.x+(b.x-a.x)*f,y:a.y+(b.y-a.y)*f)
+                context.drawLayer {layer in
+                    layer.addFilter(.shadow(color:Constellation.core,radius:5))
+                    layer.fill(Path(ellipseIn:CGRect(x:spark.x-2,y:spark.y-2,width:4,height:4)),with:.color(Constellation.coreHot))
+                }
+            }
+        }
+        // The stars.
+        for index in 0..<count {
+            let p=point(index)
+            func disc(_ r:CGFloat)->Path {Path(ellipseIn:CGRect(x:p.x-r,y:p.y-r,width:r*2,height:r*2))}
+            if connection.walking,connection.reached == index {
+                let pulse=0.5+0.5*sin(time*4)
+                context.stroke(disc(8+3*pulse),with:.color(Constellation.core.opacity(0.35+0.4*pulse)),lineWidth:1)
+            }
+            if index == last {
+                if connection.found {
+                    context.drawLayer {layer in
+                        layer.addFilter(.shadow(color:Constellation.core.opacity(0.95),radius:7))
+                        layer.fill(disc(5),with:.radialGradient(Gradient(colors:[Constellation.coreHot,Constellation.core,Constellation.coreDeep]),center:p,startRadius:0,endRadius:5))
+                    }
+                } else {
+                    context.stroke(disc(5),with:.color(.white.opacity(0.35)),style:StrokeStyle(lineWidth:1,dash:[2,2]))
+                }
+            } else {
+                context.drawLayer {layer in
+                    layer.addFilter(.shadow(color:.white.opacity(0.85),radius:3))
+                    layer.fill(disc(index == 0 ? 2.2 : 2.6),with:.color(.white))
+                }
+                if index == 0 {context.stroke(disc(5.5),with:.color(.white.opacity(0.65)),lineWidth:0.8)}
+            }
+        }
+    }
+}
+
+/// The map as a picture to keep or share: a title, the constellation and Sematrica's mark.
+struct ConnectionPoster:View {
+    let connection:ConnectionLine
+    var summary:String {
+        let steps=connection.chain.count-1
+        return "\(steps) link\(steps == 1 ? "" : "s") · "+(connection.proven ? "the shortest chain" : "the shortest found so far")
+    }
+    var body:some View {
+        VStack(alignment:.leading,spacing:14) {
+            HStack(spacing:12) {
+                ConstellationEmblem().frame(width:34,height:34)
+                VStack(alignment:.leading,spacing:3) {
+                    Text("CONNECT THE DOTS").font(.system(size:9,weight:.semibold,design:.monospaced)).tracking(2.5).foregroundStyle(Constellation.core)
+                    Text("\(connection.chain.first?.title ?? "") → \(connection.chain.last?.title ?? "")").font(.system(size:16,weight:.semibold)).foregroundStyle(.white).lineLimit(2)
+                }
+            }
+            ConnectionMap(connection:connection,animated:false)
+                .frame(height:ConnectionMap.height(for:connection))
+                .constellationCard(radius:12)
+            HStack {
+                Text(summary).font(.system(size:10,design:.monospaced)).foregroundStyle(Constellation.dim)
+                Spacer()
+                Text("SEMATRICA").font(.system(size:9,weight:.semibold,design:.monospaced)).tracking(3).foregroundStyle(Constellation.dim)
+            }
+        }
+        .padding(24)
+        .frame(width:460)
+        .background(ConstellationBackdrop())
+        .environment(\.colorScheme,.dark)
+    }
+
+    @MainActor static func image(_ connection:ConnectionLine)->NSImage? {
+        var still=connection;still.walking=false;still.reached=nil
+        let renderer=ImageRenderer(content:ConnectionPoster(connection:still))
+        renderer.scale=2
+        return renderer.nsImage
+    }
+    @MainActor static func copy(_ connection:ConnectionLine) {
+        guard let image=image(connection) else {return}
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([image])
+    }
+    @MainActor static func save(_ connection:ConnectionLine) {
+        guard let image=image(connection),let tiff=image.tiffRepresentation,let bitmap=NSBitmapImageRep(data:tiff),
+              let png=bitmap.representation(using:.png,properties:[:]) else {return}
+        let panel=NSSavePanel()
+        panel.allowedContentTypes=[.png]
+        let name="\(connection.chain.first?.title ?? "Start") to \(connection.chain.last?.title ?? "End")".replacingOccurrences(of:"/",with:"-")
+        panel.nameFieldStringValue=name+".png"
+        guard panel.runModal() == .OK,let url=panel.url else {return}
+        try? png.write(to:url)
     }
 }

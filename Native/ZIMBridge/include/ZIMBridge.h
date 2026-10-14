@@ -18,6 +18,9 @@ int az_fulltext(AZArchive archive, const char *query, int limit, AZMatch **match
 // Results [offset, offset+limit) of a full-text search (limit at most 500) and libzim's estimate of all matches.
 int az_fulltext_page(AZArchive archive, const char *query, int offset, int limit, AZMatch **matches, int *count, int *estimated, char **error);
 int az_has_fulltext(AZArchive archive);
+// The HTML article each path leads to after redirects: exactly `count` results, in order, with an
+// empty path where a path isn't an article. Reads only directory entries, never article data.
+int az_resolve_paths(AZArchive archive, const char *const *paths, int count, AZMatch **matches, int *resolved, char **error);
 uint64_t az_entry_count(AZArchive archive);
 int az_articles(AZArchive archive, uint64_t offset, int limit, AZMatch **matches, int *count, uint64_t *next, char **error);
 int az_validate(AZArchive archive, char **error);

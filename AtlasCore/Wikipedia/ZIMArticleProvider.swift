@@ -73,6 +73,26 @@ public actor ZIMArticleProvider: ResearchArticleProvider, LibraryArticleSource {
         let results=rows.map {p in (0..<Int(count)).map {SearchResult(articleID:.init(packageID:packageID,path:String(cString:p[$0].path)),title:String(cString:p[$0].title),excerpt:"")}} ?? []
         return .init(results:results,estimated:Int(estimated))
     }
+    /// The article each path leads to after redirects, from the archive's directory alone.
+    public func resolve(paths:[String]) async throws -> [String:SearchResult] {
+        guard !paths.isEmpty else {return [:]}
+        try access.validate();try Task.checkCancellation()
+        var resolved:[String:SearchResult]=[:]
+        for start in stride(from:0,to:paths.count,by:512) {
+            let chunk=Array(paths[start..<min(paths.count,start+512)])
+            let pointers:[UnsafePointer<CChar>?]=chunk.map {UnsafePointer(strdup($0))}
+            var rows:UnsafeMutablePointer<AZMatch>?;var count:Int32=0;var error:UnsafeMutablePointer<CChar>?
+            defer {az_matches_free(rows,count);az_free(error);pointers.forEach {free(UnsafeMutableRawPointer(mutating:$0))}}
+            let ok=pointers.withUnsafeBufferPointer {az_resolve_paths(handle,$0.baseAddress,Int32(chunk.count),&rows,&count,&error)}
+            guard ok != 0 else {throw AtlasError.articleUnavailable}
+            guard let rows else {continue}
+            for i in 0..<min(Int(count),chunk.count) {
+                let path=String(cString:rows[i].path)
+                if !path.isEmpty {resolved[chunk[i]]=SearchResult(articleID:.init(packageID:packageID,path:path),title:String(cString:rows[i].title),excerpt:"")}
+            }
+        }
+        return resolved
+    }
     public func articleBatch(offset:UInt64) async throws -> ArchiveArticleBatch {
         try access.validate();try Task.checkCancellation()
         var rows:UnsafeMutablePointer<AZMatch>?;var count:Int32=0;var next:UInt64=offset;var error:UnsafeMutablePointer<CChar>?

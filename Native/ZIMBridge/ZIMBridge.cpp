@@ -91,6 +91,24 @@ int az_fulltext_page(AZArchive archive,const char *query,int offset,int limit,AZ
         copyMatches(rows,matches,count);return 1;
     } AZ_CATCH
 }
+int az_resolve_paths(AZArchive archive,const char *const *paths,int count,AZMatch **matches,int *resolved,char **error) {
+    try {
+        auto& a=static_cast<Reader *>(archive)->archive;
+        std::vector<std::pair<std::string,std::string>> rows;
+        rows.reserve(std::max(count,0));
+        for(int i=0;i<count;++i) {
+            std::string path,title;
+            try {
+                if(paths && paths[i] && *paths[i]) {
+                    auto item=a.getEntryByPath(paths[i]).getItem(true);
+                    if(item.getMimetype().find("text/html")!=std::string::npos) {path=item.getPath();title=item.getTitle();}
+                }
+            } catch(const std::exception &) {}
+            rows.emplace_back(path,title);
+        }
+        copyMatches(rows,matches,resolved);return 1;
+    } AZ_CATCH
+}
 int az_articles(AZArchive archive,uint64_t offset,int limit,AZMatch **matches,int *count,uint64_t *next,char **error) {
     try {
         auto& a=static_cast<Reader *>(archive)->archive;

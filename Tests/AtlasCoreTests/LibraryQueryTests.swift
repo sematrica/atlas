@@ -29,6 +29,14 @@ actor FakeLibrary:LibraryArticleSource {
         let page=matching.dropFirst(offset).prefix(limit).map {SearchResult(articleID:.init(packageID:"pkg",path:$0.key),title:$0.value.title,excerpt:"")}
         return .init(results:Array(page),estimated:matching.count)
     }
+    func resolve(paths:[String]) async throws -> [String:SearchResult] {
+        var found:[String:SearchResult]=[:]
+        for path in paths {
+            let target=redirects[path] ?? path
+            if let entry=articles[target] {found[path] = .init(articleID:.init(packageID:"pkg",path:target),title:entry.title,excerpt:"")}
+        }
+        return found
+    }
     func articleBatch(offset:UInt64) async throws -> ArchiveArticleBatch {
         let paths=articles.keys.sorted()
         let end=min(paths.count,Int(offset)+2)

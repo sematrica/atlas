@@ -63,6 +63,7 @@ public enum CompanionPlanner {
     rule: "rule" = avoid (with "place") | stay (stay in this article) | allowLinks | clearRules.
     read: read the whole article before answering "question" (summaries, opinions, anything the excerpts can't answer).
     library: count or find across many articles, exactly. "query" = what to look for in each article. "measure" = articles (how many articles contain it) | total (how many times altogether) | list (which articles). "scope" = library (every article; the default) | linked (articles this article links to; "place" = only links in that section) | titles (the articles named in "titles") | search (the best articles about "topic"). "articles" = at most that many from the scope. "result":"more" continues the last library question where it stopped.
+    connect: find the shortest chain of links from one article to another, then walk it with the spider. "title" = the article to reach; "from" = where to start (omit for the open article). "result":"more" keeps looking when the last search stopped early.
 
     QUERY (omit fields you don't need)
     unit: word | letter | character | number | sentence | paragraph | heading | link | image | name | phrase
@@ -102,6 +103,10 @@ public enum CompanionPlanner {
     {"steps":[{"action":"library","scope":"linked","place":"Discography","measure":"total","query":{"unit":"word","equals":"jazz"}}],"reply":"I'll read each album's article."}
     User: how many times is "soul" used in Ray Charles, Aretha Franklin and Sam Cooke?
     {"steps":[{"action":"library","scope":"titles","titles":["Ray Charles","Aretha Franklin","Sam Cooke"],"measure":"total","query":{"unit":"word","equals":"soul"}}],"reply":"Reading all three."}
+    User: how is Ray Charles connected to Paris?
+    {"steps":[{"action":"connect","from":"Ray Charles","title":"Paris"}],"reply":"Let me find the trail of links between them."}
+    User: how do I get from here to the Moon?
+    {"steps":[{"action":"connect","title":"Moon"}],"reply":"Looking for the shortest path."}
     User: open the article on Paris and count its links
     {"steps":[{"action":"open","title":"Paris"},{"action":"count","query":{"unit":"link"}}],"reply":"Opening Paris first."}
     User: when was he born?
@@ -129,7 +134,7 @@ public enum CompanionPlanner {
     """
 
     static let noArticle="""
-    NO ARTICLE IS OPEN. Page actions (count, list, highlight, goto, go, follow, hunt, wander, read) can't run. You can chat, answer from general knowledge (say it isn't from the library), or open an article by title.
+    NO ARTICLE IS OPEN. Page actions (count, list, highlight, goto, go, follow, hunt, wander, read) can't run. You can chat, answer from general knowledge (say it isn't from the library), open an article by title, or connect two articles named with "from" and "title".
     """
 
     public static func messages(request:String,context:CompanionPromptContext,history:[AIMessage])->[AIMessage] {

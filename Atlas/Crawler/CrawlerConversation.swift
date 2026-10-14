@@ -12,6 +12,22 @@ struct CompanionLine:Identifiable {
     var trail:[String]=[]
     /// The articles a library question found, shown under the reply with Open buttons.
     var library:LibraryLine?
+    /// The chain of links between two articles, drawn as a constellation under the reply.
+    var connection:ConnectionLine?
+}
+
+/// A connection answer: the chain (or just its two ends while searching), and the walk along it.
+struct ConnectionLine {
+    var chain:[ConnectionStop]
+    var found:Bool
+    var proven:Bool
+    /// Articles read so far; the map shows them as faint stars.
+    var read:Int
+    /// The search stopped early and can keep looking.
+    var canContinue:Bool
+    /// The stop the spider has reached while walking the route.
+    var reached:Int?
+    var walking=false
 }
 
 /// A library answer's article list.
@@ -90,6 +106,8 @@ final class CrawlerConversation {
     @ObservationIgnored private var offeredResult:String?
     /// The last library question, kept so "check more articles" can continue it.
     @ObservationIgnored private var libraryRun:LibraryRun?
+    /// The last connection search, kept so "keep looking" can continue it.
+    @ObservationIgnored private var connectionRun:ConnectionRun?
 
     init(crawler:CrawlerController) {self.crawler=crawler}
 
@@ -237,6 +255,10 @@ final class CrawlerConversation {
         if let run=libraryRun,!run.hits.isEmpty {
             saved.append("library: "+run.ranked.prefix(5).map {"\($0.title) (\($0.count))"}.joined(separator:", ")+(run.isComplete ? "" : "; more articles remain, \"result\":\"more\" continues"))
         }
+        if let run=connectionRun {
+            let chain=run.chain.map {$0.map(\.title).joined(separator:" → ")} ?? "\(run.start.title) … \(run.target.title), not connected yet"
+            saved.append("connection: "+chain+(run.isComplete ? "" : "; the search stopped early, connect with \"result\":\"more\" keeps looking"))
+        }
         guard let page,crawler?.ready == true else {return CompanionPromptContext(state:spiderState(),highlights:highlights,results:saved)}
         return CompanionPromptContext(page:page,title:companionTitle,request:request,state:spiderState(),highlights:highlights,results:saved)
     }
@@ -315,6 +337,8 @@ final class CrawlerConversation {
             try await read(question:step.question ?? "Summarize the article",page:page,token:token)
         case "library":
             try await library(step,page:page,local:local,token:token)
+        case "connect":
+            try await connect(step,local:local,token:token)
         default:
             say("I don't know how to “\(step.action)” yet.")
         }
@@ -760,6 +784,123 @@ final class CrawlerConversation {
         var step=CompanionStep(action:"library");step.result="more"
         if let index=lines.lastIndex(where:{$0.library?.canContinue == true}) {lines[index].library?.canContinue=false}
         run(CompanionPlan(steps:[step],local:true),saying:"Check more articles")
+    }
+
+    // MARK: Connect the dots
+
+    /// Finds the shortest chain of links between two articles, then walks it with the spider:
+    /// in each article it goes to the link that leads on, lights it and follows it.
+    private func connect(_ step:CompanionStep,local:Bool,token:UUID) async throws {
+        guard let browser=crawler?.intelligence.browser,let record=browser.record,let source=browser.provider as? any LibraryArticleSource else {
+            say("Open a Wikipedia package in Library first.");return
+        }
+        var run:ConnectionRun
+        if step.result == "more" {
+            guard let previous=connectionRun,previous.packageID == record.id else {say("There's no connection search to continue.");return}
+            guard !previous.isComplete else {say(previous.proven ? "That's already the shortest chain." : "I've looked as far as I can for that one.");return}
+            run=previous
+        } else {
+            status="Finding both articles…"
+            var index:(any LibraryTextIndex)?
+            if !(try await source.hasArchiveFullText()) {index=await browser.libraryTextIndex()}
+            run=try await ConnectionEngine.start(from:step.from,to:step.title ?? "",current:browser.currentArticleID,packageID:record.id,source:source,index:index)
+        }
+        try checkpoint(token)
+        let from=run.start.title,to=run.target.title
+        let line=say(step.result == "more" ? "Looking further for a chain from \(from) to \(to)…" : "Looking for the shortest chain of links from \(from) to \(to)…")
+        if local {amend(line,trail:"understood instantly")}
+        setConnection(line,ConnectionLine(chain:run.chain ?? [run.start,run.target],found:run.chain != nil,proven:run.proven,read:run.read,canContinue:false))
+        let began=Date()
+        run=try await ConnectionEngine.advance(run,source:source) {@MainActor [weak self] progress in
+            guard let self,token == self.generation else {return}
+            self.status=progress.checkingMentions ? "Checking articles that mention \(to)…" : "Read \(Self.format(progress.read)) articles, \(progress.level) link\(progress.level == 1 ? "" : "s") out"
+            self.updateConnection(line) {$0.read=progress.read}
+        }
+        try checkpoint(token)
+        connectionRun=run
+        amend(line,text:run.answer,trail:String(format:"%.1f s",Date().timeIntervalSince(began)))
+        setConnection(line,ConnectionLine(chain:run.chain ?? [run.start,run.target],found:run.chain != nil,proven:run.proven,read:run.read,canContinue:!run.isComplete))
+        if let chain=run.chain,chain.count>1 {try await walkRoute(chain,line:line,token:token)}
+    }
+
+    private func setConnection(_ line:UUID,_ value:ConnectionLine) {
+        if let index=lines.firstIndex(where:{$0.id == line}) {lines[index].connection=value}
+    }
+    private func updateConnection(_ line:UUID,_ change:(inout ConnectionLine)->Void) {
+        guard let index=lines.firstIndex(where:{$0.id == line}),var value=lines[index].connection else {return}
+        change(&value);lines[index].connection=value
+    }
+
+    /// Walks a chain from its first article: in each one the spider goes to the link that leads on,
+    /// lights it in orange and follows it.
+    private func walkRoute(_ chain:[ConnectionStop],line:UUID,token:UUID) async throws {
+        guard let crawler,let browser=crawler.intelligence.browser,chain.count>1 else {return}
+        guard rules.allowLinks else {say("You asked me to stay in this article, so I won't walk the route. Say “allow links”, then press Walk it.");return}
+        updateConnection(line) {$0.walking=true;$0.reached=0}
+        defer {updateConnection(line) {$0.walking=false}}
+        var page:CrawlerPageMap?
+        if crawler.ready,browser.currentArticleID?.path == chain[0].path {page=try await readPage()}
+        else {page=try await navigate(path:chain[0].path,token:token)}
+        guard page != nil else {return}
+        for index in 0..<(chain.count-1) {
+            try checkpoint(token)
+            let here=chain[index],next=chain[index+1]
+            updateConnection(line) {$0.reached=index}
+            status="\(here.title) → \(next.title)"
+            if let current=page,let link=routeLink(to:next,on:current) {
+                let match=PageMatch(range:nil,elementID:link.id,text:link.text,rect:link.rect,order:0)
+                if let box=try await rects([match],page:current).first ?? nil {
+                    try await walk(to:box.center,token:token,refresh:{[weak self] in await self?.freshCenter(match,page:current)})
+                    layerSerial += 1
+                    let style=HighlightStyle.parse("orange") ?? HighlightStyle(colors:["#ff9629"],label:"orange")
+                    let layer=HighlightLayer(id:"l\(layerSerial)",label:"the way to \(next.title)",style:style,count:1,document:current.document)
+                    layers.append(layer)
+                    try await send(style.paints(for:[match]),layer:layer,page:current)
+                    // A moment to see the lit link before the next article opens.
+                    try await Task.sleep(for:.milliseconds(800))
+                }
+            }
+            try checkpoint(token)
+            page=try await navigate(path:next.path,token:token)
+            guard page != nil else {say("I couldn't open “\(next.title)”, so the walk stopped there.");return}
+        }
+        updateConnection(line) {$0.reached=chain.count-1}
+        status="Arrived at \(chain[chain.count-1].title)"
+        amend(line,trail:"walked")
+    }
+
+    /// The link on the page that leads to the next stop: the very link the chain was found through,
+    /// else any link to that article.
+    private func routeLink(to next:ConnectionStop,on page:CrawlerPageMap)->CrawlerPageItem? {
+        func path(_ href:String?)->String? {
+            guard let href,let base=crawler?.intelligence.browser?.webView?.url,let url=URL(string:href,relativeTo:base)?.absoluteURL else {return nil}
+            if url.scheme == "atlas",url.host == base.host {return String(url.path.dropFirst())}
+            return OfflineURL.localWikipediaPath(url)
+        }
+        if let via=next.via,let link=page.links.first(where:{path($0.href) == via}) {return link}
+        let names=[next.title]+(next.via.map {[ArticleLinks.destinationTitle($0)]} ?? [])
+        return page.links.first {link in names.contains {ArticleLinks.points(link.href,to:$0)}}
+    }
+
+    /// Walks a found chain again from its start.
+    func walkConnection(_ lineID:UUID) {
+        guard let chain=lines.first(where:{$0.id == lineID})?.connection?.chain,chain.count>1 else {return}
+        interrupt()
+        busy=true;status="Walking the route…"
+        let token=generation
+        task=Task {[weak self] in
+            guard let self else {return}
+            defer {if token == self.generation {self.endRequest()}}
+            do {try await self.walkRoute(chain,line:lineID,token:token)}
+            catch is CancellationError {}
+            catch {if token == self.generation {self.say(error.localizedDescription,isError:true)}}
+        }
+    }
+    /// Continues the last connection search.
+    func continueConnection() {
+        var step=CompanionStep(action:"connect");step.result="more"
+        if let index=lines.lastIndex(where:{$0.connection?.canContinue == true}) {lines[index].connection?.canContinue=false}
+        run(CompanionPlan(steps:[step],local:true),saying:"Keep looking")
     }
 
     // MARK: Crawler modes

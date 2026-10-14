@@ -16,6 +16,8 @@ public enum CompanionLocalParser {
         if let plan=control(cursor.rest) {return plan}
         if let plan=goPlace(&cursor) {return plan}
         cursor.i=0
+        if let plan=connectRequest(&cursor,original:request) {return plan}
+        cursor.i=0
         if let plan=libraryRequest(&cursor,original:request) {return plan}
         cursor.i=0
         return taskRequest(&cursor)
@@ -147,6 +149,116 @@ public enum CompanionLocalParser {
         }
         guard let last=words.last,["section","part","chapter","heading"].contains(last),words.count>=2,words.count<=8 else {cursor.i=start;return nil}
         var step=CompanionStep(action:"go");step.place=words.dropLast().joined(separator:" ")
+        return .init(steps:[step],local:true)
+    }
+
+    // MARK: Connect the dots
+
+    static let continueConnect:Set<String>=["keep looking","keep searching","look further","search further","look deeper","search deeper","keep trying",
+                                            "keep looking for a path","keep looking for the path","keep looking for a connection","keep looking for a shorter path",
+                                            "look for a shorter path","search for a shorter path","keep looking for a shorter one","look for a shorter one"]
+    static let connectedWords:Set<String>=["connected","linked","joined","tied"]
+    static let routeNouns:Set<String>=["path","chain","route","connection","trail"]
+    /// "this", "here", "this article": the open article.
+    static let openArticleWords:Set<String>=["this","here","this article","this page","the article","the page","the current article","the current page","this one","it"]
+
+    /// "how is Ray Charles connected to Paris", "how are jazz and Paris linked", "connect this to the Moon",
+    /// "find the shortest path from Paris to Tokyo", "how do I get from here to Jazz", "keep looking".
+    static func connectRequest(_ cursor:inout Cursor,original request:String)->CompanionPlan? {
+        if continueConnect.contains(cursor.rest) {
+            var step=CompanionStep(action:"connect");step.result="more"
+            return .init(steps:[step],local:true)
+        }
+        func cut(_ body:[Token],at words:Set<String>,last:Bool=false)->(from:[Token],to:[Token])? {
+            let found=body.indices.filter {!body[$0].quoted && words.contains(body[$0].text)}
+            guard let i=last ? found.last : found.first,i>0,i<body.count-1 else {return nil}
+            return (Array(body[..<i]),Array(body[(i+1)...]))
+        }
+        func dropTrailing(_ body:inout [Token]) {
+            for tail in [["to","each","other"],["to","one","another"],["together"],["up"]] where body.count>tail.count && body.suffix(tail.count).map(\.text) == tail && !body.suffix(tail.count).contains(where:\.quoted) {
+                body.removeLast(tail.count);return
+            }
+        }
+        var ends:(from:[Token],to:[Token])?
+        let body={(cursor:Cursor) in Array(cursor.tokens[cursor.i...])}
+        if cursor.accept("how") {
+            // "how do I get from…" and "how to get from…" ask for a route; anything else starts over after "how".
+            let mark=cursor.i
+            var asksRoute=cursor.accept("to")
+            if !asksRoute {
+                asksRoute=cursor.accept(["do","can","could","would","should"]) != nil && cursor.accept(["i","you","we","one"]) != nil
+                if !asksRoute {cursor.i=mark}
+            }
+            if asksRoute {
+                // how do I get from X to Y, how to get from X to Y
+                guard cursor.accept(["get","go","travel","walk","crawl"]) != nil,cursor.accept("from") else {return nil}
+                ends=cut(body(cursor),at:["to"])
+            } else if let be=cursor.accept(["is","was","are","were"]) {
+                var rest=body(cursor)
+                if be == "are" || be == "were" {
+                    // how are X and Y connected (to each other)
+                    dropTrailing(&rest)
+                    guard let verb=rest.last,!verb.quoted,connectedWords.contains(verb.text) else {return nil}
+                    rest.removeLast()
+                    ends=cut(rest,at:["and"],last:true)
+                } else {
+                    // how is X connected to Y
+                    guard let k=rest.firstIndex(where:{!$0.quoted && connectedWords.contains($0.text)}),k>0,k+2<rest.count,
+                          !rest[k+1].quoted,["to","with"].contains(rest[k+1].text) else {return nil}
+                    ends=(Array(rest[..<k]),Array(rest[(k+2)...]))
+                }
+            } else if let aux=cursor.accept(["does","did","do"]) {
+                var rest=body(cursor)
+                if aux == "do" {
+                    // how do X and Y connect
+                    dropTrailing(&rest)
+                    guard let verb=rest.last,!verb.quoted,["connect","link","relate"].contains(verb.text) else {return nil}
+                    rest.removeLast()
+                    ends=cut(rest,at:["and"],last:true)
+                } else {
+                    // how does X connect to Y / lead to Y / get to Y
+                    guard let k=rest.firstIndex(where:{!$0.quoted && ["connect","link","lead","get"].contains($0.text)}),k>0,k+2<rest.count,
+                          !rest[k+1].quoted,["to","with"].contains(rest[k+1].text) else {return nil}
+                    ends=(Array(rest[..<k]),Array(rest[(k+2)...]))
+                }
+            } else {return nil}
+        } else if cursor.accept(sequence:["connect","the","dots"]) || cursor.accept("connect") {
+            // connect X to Y, connect X and Y, connect the dots between X and Y, connect this to Y
+            if cursor.accept("between") {ends=cut(body(cursor),at:["and"],last:true)}
+            else {
+                _ = cursor.accept("from")
+                if cursor.accept("to") {ends=([],body(cursor))}
+                else {ends=cut(body(cursor),at:["to","and","with"])}
+            }
+        } else if cursor.accept(sequence:["six","degrees"]) || cursor.accept(sequence:["degrees","of","separation"]) {
+            if cursor.accept("between") {ends=cut(body(cursor),at:["and"],last:true)}
+            else if cursor.accept("from") {ends=cut(body(cursor),at:["to"])}
+            else {return nil}
+        } else if cursor.accept(sequence:["what","connects"]) || cursor.accept(sequence:["what","links"]) {
+            // what connects X to Y / X and Y (not "what links to Paris", a library question)
+            guard cursor.peek() != "to" else {return nil}
+            ends=cut(body(cursor),at:["to","and","with"])
+        } else {
+            // (find | show me | trace | what is) the shortest path/chain/route from X to Y | between X and Y | to Y
+            let leads:[[String]]=[["find"],["show","me"],["show"],["trace"],["give","me"],["get","me"],["draw"],["map"],["plot"],["what","is"],["whats"],["what's"],["tell","me"],["walk","me"],["take","me"]]
+            for lead in leads.sorted(by:{$0.count>$1.count}) where cursor.accept(sequence:lead) {break}
+            cursor.skip(["a","an","the","me"])
+            _ = cursor.accept(["shortest","quickest","fastest","best"])
+            _ = cursor.accept("link")
+            guard cursor.accept(routeNouns) != nil else {return nil}
+            _ = cursor.accept(sequence:["of","links"])
+            if cursor.accept("from") {ends=cut(body(cursor),at:["to"])}
+            else if cursor.accept("between") {ends=cut(body(cursor),at:["and"],last:true)}
+            else if cursor.accept("to") {ends=([],body(cursor))}
+            else {return nil}
+        }
+        guard let ends,!ends.to.isEmpty,ends.to.count<=10,ends.from.count<=10 else {return nil}
+        let to=ends.to.map(\.text).joined(separator:" "),from=ends.from.map(\.text).joined(separator:" ")
+        // The target has to be named; "connect Paris to here" goes to the model.
+        guard !openArticleWords.contains(to) else {return nil}
+        var step=CompanionStep(action:"connect")
+        step.title=original(to,in:request)
+        if !from.isEmpty,!openArticleWords.contains(from) {step.from=original(from,in:request)}
         return .init(steps:[step],local:true)
     }
 

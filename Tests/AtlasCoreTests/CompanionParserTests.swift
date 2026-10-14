@@ -236,3 +236,65 @@ final class LibraryParserTests:XCTestCase {
         XCTAssertTrue(CompanionPlan.schemaJSON.contains("\"measure\""))
     }
 }
+
+final class ConnectParserTests:XCTestCase {
+    private func connect(_ request:String,file:StaticString=#filePath,line:UInt=#line)->CompanionStep? {
+        let plan=CompanionLocalParser.parse(request)
+        XCTAssertEqual(plan?.steps.first?.action,"connect","“\(request)” should connect two articles",file:file,line:line)
+        XCTAssertEqual(plan?.local,true,file:file,line:line)
+        return plan?.steps.first
+    }
+
+    func testTwoArticles() {
+        for request in ["How is Ray Charles connected to Paris?","how is Ray Charles linked to Paris","how does Ray Charles connect to Paris",
+                        "how are Ray Charles and Paris connected","how are Ray Charles and Paris linked to each other","how do Ray Charles and Paris connect",
+                        "connect Ray Charles to Paris","connect Ray Charles and Paris","connect the dots between Ray Charles and Paris",
+                        "find the shortest path from Ray Charles to Paris","path from Ray Charles to Paris","what's the connection between Ray Charles and Paris",
+                        "how do I get from Ray Charles to Paris","how to get from Ray Charles to Paris","six degrees from Ray Charles to Paris",
+                        "what connects Ray Charles and Paris","trace the chain of links from Ray Charles to Paris","please connect Ray Charles to Paris"] {
+            let step=connect(request)
+            XCTAssertEqual(step?.from,"Ray Charles",request)
+            XCTAssertEqual(step?.title,"Paris",request)
+            XCTAssertTrue(step?.problems.isEmpty == true,request)
+        }
+    }
+
+    func testFromTheOpenArticle() {
+        for request in ["how is this article connected to the Moon","connect this to the Moon","connect to the Moon","find a path to the Moon",
+                        "how do I get from here to the Moon","how is this connected to the Moon"] {
+            let step=connect(request)
+            XCTAssertNil(step?.from,request)
+            XCTAssertEqual(step?.title,"the Moon",request)
+        }
+    }
+
+    func testQuotedTitlesAndContinuing() {
+        let quoted=connect("connect \"Simon and Garfunkel\" to \"Welcome to the Jungle\"")
+        XCTAssertEqual(quoted?.from,"Simon and Garfunkel","the user's own capitalization")
+        XCTAssertEqual(quoted?.title,"Welcome to the Jungle")
+        // The last "and" separates the two, so a title can contain one.
+        XCTAssertEqual(connect("how are Simon and Garfunkel and Paris connected")?.from,"Simon and Garfunkel")
+        XCTAssertEqual(connect("keep looking")?.result,"more")
+        XCTAssertEqual(connect("look for a shorter path")?.result,"more")
+    }
+
+    func testOtherRequestsAreLeftAlone() {
+        XCTAssertEqual(CompanionLocalParser.parse("what links to Paris")?.steps.first?.action,"library","a library question")
+        XCTAssertNotEqual(CompanionLocalParser.parse("find links to Paris")?.steps.first?.action,"connect")
+        XCTAssertNotEqual(CompanionLocalParser.parse("go to the Early life section")?.steps.first?.action,"connect")
+        XCTAssertNil(CompanionLocalParser.parse("how is Paris related to France"),"relations are a question for the model")
+        XCTAssertNil(CompanionLocalParser.parse("connect Paris to here"),"the target has to be named")
+    }
+
+    func testPlansFromAModel() throws {
+        let raw=#"{"steps":[{"action":"six degrees","titles":["Ray Charles","Paris"]}],"reply":"Let me look."}"#
+        let step=try XCTUnwrap(CompanionPlan.decode(raw)?.normalized().steps.first)
+        XCTAssertEqual(step.action,"connect")
+        XCTAssertEqual(step.from,"Ray Charles");XCTAssertEqual(step.title,"Paris")
+        XCTAssertTrue(step.problems.isEmpty,step.problems.joined(separator:"; "))
+        let missing=#"{"steps":[{"action":"connect"}],"reply":"x"}"#
+        XCTAssertFalse(try XCTUnwrap(CompanionPlan.decode(missing)).normalized().problems.isEmpty,"connect needs a target")
+        XCTAssertTrue(CompanionPlan.schemaJSON.contains("\"from\""))
+        XCTAssertTrue(CompanionPlan.schemaJSON.contains("\"connect\""))
+    }
+}

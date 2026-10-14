@@ -35,6 +35,8 @@ Anything that combines a **target**, **conditions** and an **action**:
 | count jazz in the articles linked in the Discography section | Adds up the matches in every article that section links to. |
 | how many times is "soul" used in Ray Charles, Aretha Franklin and Sam Cooke | Reads just those articles (the model understands the list). |
 | check more articles | Continues a library question that stopped after its first batch. |
+| how is Ray Charles connected to Paris · connect this to the Moon | Finds the shortest chain of links between the two, walks it with the spider and draws it as a constellation (see *Connect the dots*). |
+| keep looking | Continues a connection search that stopped after its first batch. |
 
 **Targets:** words (or nouns, verbs, adjectives, adverbs…), letters, characters, numbers, sentences, paragraphs, headings, links, images, names (people, places, organizations), and exact phrases.
 **Conditions:** starts with, ends with, contains or equals a spelling (with "or" alternatives), the negatives of those, part of speech, uppercase/lowercase/capitalized, length in letters or words, a section or sections to skip, unique spellings, and order (first, last, longest, shortest, most and least common, with a rank or a limit).
@@ -72,6 +74,14 @@ A library question counts or finds in many articles at once: how many articles m
 **Long questions.** Sematrica reads up to 2,000 articles per request, four at a time, and shows its progress. If more remain, the answer says so and **Check more articles** (or "check more articles") continues where it stopped.
 
 **Results.** The reply gives the number and how complete it is. Under it, the matching articles are listed with their counts, most first. Each one opens the article and highlights what was counted there. **Copy list** copies titles and counts as tab-separated lines.
+
+## Connect the dots
+
+Ask how two articles are connected ("how is Ray Charles connected to Paris?", "connect this to the Moon", "find the shortest path from Jazz to Tokyo") and Sematrica finds the shortest chain of links from one to the other, offline. The spider then walks it: in each article it goes to the link that leads on, lights it orange and follows it. The chain is also drawn as a constellation under the reply, with each article a star, the start ringed and the destination an orange core; the threads glow as the spider crosses them. **Walk it** walks the route again, and **Copy image** and **Save image…** give a picture of the map to keep or share. Without a starting article, the open article is the start.
+
+**How the chain is found.** The search reads outward from the start a level at a time: every article the start links to, then the articles they link to, and so on. Within a level, articles that mention the destination are read first, then those that many articles at the level link to. Meanwhile the archive's full-text search (or the Research text index) proposes up to 300 articles that mention the destination, and the ones that really link to it become stepping stones: reaching any of them completes a chain. Every link in a chain was read on the article's page, so the spider can walk it. Links that go through a redirect ("French capital" for Paris) count, and the map notes them.
+
+**Shortest, and how sure.** Once every article within a distance of the start has been read, no shorter chain can exist, and the answer says so: "That's the shortest chain: none of the 412 articles Ray Charles links to links to Paris directly." When a chain is found before its level has been read in full, the answer says a shorter one might exist. Sematrica reads up to 2,000 articles per request; **Keep looking** (or "keep looking") continues where it stopped. With neither a full-text index nor a text index, the search can only read outward, which still finds most chains of up to three links.
 
 ## Models
 

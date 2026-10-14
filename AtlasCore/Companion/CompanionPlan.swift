@@ -4,7 +4,7 @@ import Foundation
 /// action needs; everything is validated and executed by Atlas itself.
 public struct CompanionStep:Codable,Sendable,Equatable {
     /// count, list, highlight, goto, clear, show, go, follow, open, back,
-    /// hunt, explore, wander, pause, resume, stop, speed, rule, read, library
+    /// hunt, explore, wander, pause, resume, stop, speed, rule, read, library, connect
     public var action:String
     /// What to look for (count, list, highlight, goto).
     public var query:PageQuery?
@@ -20,8 +20,10 @@ public struct CompanionStep:Codable,Sendable,Equatable {
     public var result:String?
     /// A section heading, link text or "top"/"bottom" (go, follow, rule avoid).
     public var place:String?
-    /// An article title (open).
+    /// An article title (open; connect: the article to reach).
     public var title:String?
+    /// connect: the article to start from; omitted for the open article.
+    public var from:String?
     /// An exact phrase to hunt for using only local perception (hunt).
     public var phrase:String?
     /// A topic to explore across articles (explore).
@@ -48,7 +50,7 @@ public struct CompanionStep:Codable,Sendable,Equatable {
     public init(action:String,query:PageQuery?=nil) {self.action=action;self.query=query}
 
     enum CodingKeys:String,CodingKey {
-        case action,query,footing,color,instant,target,result,place,title,phrase,topic,speed,rule,question
+        case action,query,footing,color,instant,target,result,place,title,from,phrase,topic,speed,rule,question
         case scope,measure,titles,articles,path
     }
     public init(from decoder:Decoder) throws {
@@ -62,6 +64,7 @@ public struct CompanionStep:Codable,Sendable,Equatable {
         result=c.lenientString(.result)
         place=c.lenientString(.place)
         title=c.lenientString(.title)
+        from=c.lenientString(.from)
         phrase=c.lenientString(.phrase,trim:false)
         topic=c.lenientString(.topic)
         speed=c.lenientString(.speed)
@@ -74,7 +77,7 @@ public struct CompanionStep:Codable,Sendable,Equatable {
         path=c.lenientString(.path)
     }
 
-    public static let actions=["count","list","highlight","goto","clear","show","go","follow","open","back","hunt","explore","wander","pause","resume","stop","speed","rule","read","library"]
+    public static let actions=["count","list","highlight","goto","clear","show","go","follow","open","back","hunt","explore","wander","pause","resume","stop","speed","rule","read","library","connect"]
     static let queryActions:Set<String>=["count","list","highlight","goto"]
 
     /// Maps synonyms a model might use onto the executable action names.
@@ -118,6 +121,12 @@ public struct CompanionStep:Codable,Sendable,Equatable {
         case "library","acrosslibrary","allarticles","searchlibrary","libraryquery","countarticles","acrossarticles","articles","everyarticle","otherarticles":
             step.action="library"
             if step.scope == nil && step.titles?.isEmpty == false {step.scope="titles"}
+        case "connect","connection","connectdots","connectthedots","path","linkpath","route","chain","linkchain","howconnected","sixdegrees","degrees","between","shortestpath","findpath","trail":
+            step.action="connect"
+            if step.title == nil,let titles=step.titles,!titles.isEmpty {
+                step.title=titles.last
+                if step.from == nil,titles.count>1 {step.from=titles.first}
+            }
         case "answer","reply","say","chat","respond","talk","none","noop","nothing","": return nil
         default: step.action=raw
         }
@@ -191,6 +200,7 @@ public struct CompanionStep:Codable,Sendable,Equatable {
         case "go": if place == nil {issues.append("go needs a place")}
         case "follow": if place == nil {issues.append("follow needs the link text in place")}
         case "open": if title == nil && path == nil {issues.append("open needs an article title")}
+        case "connect": if title == nil && result != "more" {issues.append("connect needs the article to reach in title")}
         case "hunt": if phrase == nil {issues.append("hunt needs a phrase")}
         case "explore": if topic == nil {issues.append("explore needs a topic")}
         case "speed": if !["faster","slower","normal"].contains(speed ?? "") {issues.append("speed must be faster, slower or normal")}
@@ -199,7 +209,7 @@ public struct CompanionStep:Codable,Sendable,Equatable {
             if rule == "avoid" && place == nil {issues.append("rule avoid needs a place")}
         default: break
         }
-        for value in [color,target,place,title,phrase,topic,question].compactMap({$0})+(titles ?? []) where value.count>500 {
+        for value in [color,target,place,title,from,phrase,topic,question].compactMap({$0})+(titles ?? []) where value.count>500 {
             issues.append("a field is longer than 500 characters")
         }
         return issues
@@ -324,7 +334,7 @@ extension CompanionPlan {
                 ("action",enumeration(CompanionStep.actions)),
                 ("query",querySchema),
                 ("color",text),("instant",boolean),("footing",querySchema),
-                ("result",text),("target",text),("place",text),("title",text),("phrase",text),("topic",text),
+                ("result",text),("target",text),("place",text),("title",text),("from",text),("phrase",text),("topic",text),
                 ("speed",enumeration(["faster","slower","normal"])),
                 ("rule",enumeration(["avoid","stay","allowLinks","clearRules"])),
                 ("question",text),
