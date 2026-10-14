@@ -176,7 +176,8 @@ public struct ProceduralCrawlerAgent: Sendable {
     public private(set) var navigator:CrawlerNavigator
     private var decisionIn=0.0
     private var dwell=0.0
-    private var burstRemaining=0.65
+    /// Time until the next unhurried pause while wandering.
+    private var cruiseRemaining=2.5
     private var lastRevision:Int?
     private var detour:DocumentPosition?
     public private(set) var guidedGoal:DocumentPosition?
@@ -186,7 +187,7 @@ public struct ProceduralCrawlerAgent: Sendable {
     public mutating func start(position:DocumentPosition,mission:CrawlerMission,seed:UInt64?=nil) {
         state=CrawlerState(id:state.id,position:position,mission:mission);state.behavior = .spawning
         if let seed {navigator=CrawlerNavigator(seed:seed)} else {navigator.reset()}
-        state.desired=position; memory=CrawlerMemory(); observation=nil;dwell=0.65;decisionIn=0;lastRevision=nil;detour=nil;burstRemaining=0.65;guidedGoal=nil;suppressMission=false
+        state.desired=position; memory=CrawlerMemory(); observation=nil;dwell=0.65;decisionIn=0;lastRevision=nil;detour=nil;cruiseRemaining=2.5;guidedGoal=nil;suppressMission=false
     }
     public mutating func suppressHunt(_ suppressed:Bool) {
         suppressMission=suppressed
@@ -248,12 +249,12 @@ public struct ProceduralCrawlerAgent: Sendable {
             if dwell<=0 { state.behavior = .approachingTarget };return
         }
         if state.behavior == .inspecting && dwell>0 {settle(dt:dt);return}
-        // Bounded bursts give the insect a quick scan-and-scuttle rhythm without changing coverage.
+        // Long, gliding stretches with an occasional unhurried pause to look around.
         if !reduceMotion,state.match == nil,guidedGoal == nil {
-            burstRemaining -= dt
-            if burstRemaining<=0 {
-                burstRemaining=0.4+navigator.random()*0.5
-                state.behavior = .inspecting;dwell=0.10+navigator.random()*0.13
+            cruiseRemaining -= dt
+            if cruiseRemaining<=0 {
+                cruiseRemaining=2.5+navigator.random()*2.5
+                state.behavior = .inspecting;dwell=0.45+navigator.random()*0.5
                 settle(dt:dt);return
             }
         }
@@ -276,38 +277,63 @@ public struct ProceduralCrawlerAgent: Sendable {
             if detour?.distance(to:state.position) ?? 0 < 16 {detour=nil}
             state.desired=detour ?? frontier
             decisionIn=0.10
-            if case .freeCrawl=state.mission, navigator.random()<0.04 {
-                state.behavior = .inspecting;dwell=0.16+navigator.random()*0.16
+            if case .freeCrawl=state.mission, navigator.random()<0.01 {
+                state.behavior = .inspecting;dwell=0.4+navigator.random()*0.3
             } else { state.behavior = (state.desired.x-state.position.x)*state.velocity.x+(state.desired.y-state.position.y)*state.velocity.y < 0 ? .turning : .walking }
         }
         if state.behavior == .inspecting && dwell>0 {settle(dt:dt);return}
+        // Aim inside the page margins, so the body slows down before an edge instead of hitting it.
+        let minX=min(20,observation.documentWidth/2),minY=min(20,observation.documentHeight/2)
+        state.desired.x=min(max(minX,state.desired.x),observation.documentWidth-minX)
+        state.desired.y=min(max(minY,state.desired.y),observation.documentHeight-minY)
         let distance=state.position.distance(to:state.desired)
         guard distance>0.5 else {settle(dt:dt);return}
         // Don't outrun the last perception disk; waiting allows the slower senses loop to catch up.
         let perceptionRoom=max(0,observation.radius*0.5-state.position.distance(to:observation.center))
-        if perceptionRoom<=0 {state.velocity = .zero;return}
-        let organic=reduceMotion ? 1 : 0.93+0.07*sin(state.elapsed*9)
+        // Glide to a halt rather than stopping dead while the senses catch up.
+        if perceptionRoom<=0 {settle(dt:dt);return}
+        // A slow breath in the pace, and a gentle approach: the body eases into its destination.
+        let organic=reduceMotion ? 1 : 0.95+0.05*sin(state.elapsed*2.3)
         let magnitude=min(max(0,reduceMotion ? min(speed,84) : speed)*organic,
-                          distance*(reduceMotion ? 5 : 10),perceptionRoom*18)
+                          distance*(reduceMotion ? 3 : 4),perceptionRoom*18)
         let vx=(state.desired.x-state.position.x)/distance*magnitude,vy=(state.desired.y-state.position.y)/distance*magnitude
         let previousSpeed=hypot(state.velocity.x,state.velocity.y)
         let alignment=(state.velocity.x*vx+state.velocity.y*vy)/max(1,previousSpeed*magnitude)
         let turning=previousSpeed>15 && alignment<0.7
-        let response=reduceMotion ? 7.0 : (turning ? 12.0 : 20.0)
+        // Soft acceleration, and wide arcs through turns.
+        let response=reduceMotion ? 4.0 : (turning ? 3.5 : 5.0)
         let smooth=1-exp(-dt*response)
         state.velocity.x += (vx-state.velocity.x)*smooth;state.velocity.y += (vy-state.velocity.y)*smooth
+        cushion()
         state.position=state.position.moved(state.velocity.x*dt,state.velocity.y*dt)
+        confine()
+    }
+
+    private mutating func settle(dt:Double) {
+        let decay=exp(-dt*7)
+        state.velocity.x *= decay;state.velocity.y *= decay
+        if hypot(state.velocity.x,state.velocity.y)<2 {state.velocity = .zero}
+        cushion()
+        state.position=state.position.moved(state.velocity.x*dt,state.velocity.y*dt)
+        confine()
+    }
+    /// Near a page edge, speed toward it fades with the remaining gap, so the body glides to a stop.
+    private mutating func cushion() {
+        guard let observation else {return}
+        let minX=min(20,observation.documentWidth/2),minY=min(20,observation.documentHeight/2),softness=6.0
+        let p=state.position
+        if state.velocity.x<0 {state.velocity.x=max(state.velocity.x,-max(0,p.x-minX)*softness)}
+        if state.velocity.x>0 {state.velocity.x=min(state.velocity.x,max(0,observation.documentWidth-minX-p.x)*softness)}
+        if state.velocity.y<0 {state.velocity.y=max(state.velocity.y,-max(0,p.y-minY)*softness)}
+        if state.velocity.y>0 {state.velocity.y=min(state.velocity.y,max(0,observation.documentHeight-minY-p.y)*softness)}
+    }
+    /// Keeps the body inside the page margins.
+    private mutating func confine() {
+        guard let observation else {return}
         let minX=min(20,observation.documentWidth/2),minY=min(20,observation.documentHeight/2)
         let clampedX=min(max(minX,state.position.x),observation.documentWidth-minX)
         let clampedY=min(max(minY,state.position.y),observation.documentHeight-minY)
         if clampedX != state.position.x {state.velocity.x=0;state.position.x=clampedX}
         if clampedY != state.position.y {state.velocity.y=0;state.position.y=clampedY}
-    }
-
-    private mutating func settle(dt:Double) {
-        let decay=exp(-dt*28)
-        state.velocity.x *= decay;state.velocity.y *= decay
-        if hypot(state.velocity.x,state.velocity.y)<2 {state.velocity = .zero}
-        state.position=state.position.moved(state.velocity.x*dt,state.velocity.y*dt)
     }
 }

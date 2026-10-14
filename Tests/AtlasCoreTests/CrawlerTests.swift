@@ -2,19 +2,27 @@ import XCTest
 @testable import AtlasCore
 
 final class CrawlerTests:XCTestCase {
-    func testScuttlingHasFastBurstsAndBriefStationaryInspections() {
+    func testWanderingGlidesWithOccasionalUnhurriedPauses() {
         var agent=ProceduralCrawlerAgent()
         agent.start(position:.init(x:100,y:100),mission:.freeCrawl)
-        var peak=0.0,stops=0
-        for _ in 0..<600 {
+        var peak=0.0,pauses=0,still=0,wasMoving=false,sharpestChange=0.0
+        for _ in 0..<1200 {
             agent.perceive(sample([],center:agent.state.position))
+            let before=agent.state.velocity
             agent.advance(dt:1.0/60)
-            peak=max(peak,hypot(agent.state.velocity.x,agent.state.velocity.y))
-            if agent.state.elapsed>1,agent.state.behavior == .inspecting,agent.state.velocity == .zero {stops += 1}
+            let speed=hypot(agent.state.velocity.x,agent.state.velocity.y)
+            peak=max(peak,speed)
+            if agent.state.elapsed>1 {
+                sharpestChange=max(sharpestChange,hypot(agent.state.velocity.x-before.x,agent.state.velocity.y-before.y))
+                if speed<20 {still += 1;if wasMoving {pauses += 1}}
+                wasMoving=speed>=20
+            }
         }
         XCTAssertGreaterThan(peak,200)
-        XCTAssertGreaterThan(stops,5)
-        XCTAssertLessThan(stops,300,"Brief rests must not dominate exploration")
+        XCTAssertGreaterThan(pauses,0,"It stops now and then to look around")
+        XCTAssertLessThan(pauses,10,"No stop-start bursts: about one pause every few seconds")
+        XCTAssertLessThan(still,400,"Pauses must not dominate exploration")
+        XCTAssertLessThan(sharpestChange,40,"Speed and direction change gradually from frame to frame")
     }
     func terrain(_ text:String,x:Double=90,y:Double=90,id:String="a",order:Int=0)->CrawlerTerrain {
         .init(id:id,group:"paragraph",order:order,kind:.text,rect:.init(x:x,y:y,width:40,height:16),text:text)
@@ -96,7 +104,9 @@ final class CrawlerTests:XCTestCase {
             let body=DocumentPosition(x:118+Double(frame)*4,y:100)
             gait.advance(body:body,velocity:.init(x:240,y:0),anchors:[],dt:1.0/60,reduceMotion:false)
             let active=gait.legs.filter(\.isStepping).count
-            XCTAssertLessThanOrEqual(active,4)
+            // The gait starts turned 90° from the direction of travel; while it swings round,
+            // a foot at the edge of its reach may take one extra catch-up step instead of snapping.
+            XCTAssertLessThanOrEqual(active,frame<15 ? 6 : 4)
             if active==4 {sawOverlappingPairs=true}
             for i in 0..<8 {
                 if !oldStepping[i] && !gait.legs[i].isStepping {
@@ -152,6 +162,18 @@ final class CrawlerTests:XCTestCase {
             }
         }
     }
+    func testWalkingStepsAreLongAndUnhurried() {
+        XCTAssertGreaterThanOrEqual(CrawlerLegController.swingDuration(speed:200,reduceMotion:false),0.19,"A wandering step takes about a fifth of a second")
+        XCTAssertLessThanOrEqual(CrawlerLegController.swingDuration(speed:600,reduceMotion:false),0.1,"Hurrying shortens the swing")
+        var gait=CrawlerLegController();gait.reset(at:.init(x:100,y:100))
+        var launches=0,wasStepping=Array(repeating:false,count:8)
+        for frame in 0..<180 {
+            gait.advance(body:.init(x:100+Double(frame)*200/60,y:100),velocity:.init(x:200,y:0),anchors:[],dt:1.0/60,reduceMotion:false)
+            for i in 0..<8 {if gait.legs[i].isStepping && !wasStepping[i] {launches += 1};wasStepping[i]=gait.legs[i].isStepping}
+        }
+        // 600 pt in 3 s: long strides need only a few steps per leg.
+        XCTAssertLessThan(launches,8*9,"Strides should be long, not a flurry of short steps")
+    }
     func testKneesBendOutwardWithFixedSegments() {
         var gait=CrawlerLegController();gait.reset(at:.init(x:200,y:200))
         let body=DocumentPosition(x:200,y:200)
@@ -160,6 +182,11 @@ final class CrawlerTests:XCTestCase {
             XCTAssertEqual(attachment.distance(to:knee),CrawlerLegController.segment,accuracy:0.5)
             XCTAssertEqual(knee.distance(to:foot),CrawlerLegController.segment,accuracy:0.5)
             XCTAssertGreaterThan(knee.distance(to:body),attachment.distance(to:body),"The knee sits outside the body")
+        }
+        // Heading is +y at rest: on each side the knees run front to back, so the legs fan out without crossing.
+        for side in [0,4] {
+            let forward=(side..<side+4).map {gait.knee($0,body:body).y}
+            XCTAssertEqual(forward,forward.sorted(by:>),"Knees on one side must not cross")
         }
     }
     func testGaitRecoversFromAJumpWithoutPageSpanningLegs() {
@@ -179,7 +206,7 @@ final class CrawlerTests:XCTestCase {
             gait.advance(body:stopped,velocity:.zero,anchors:[],dt:1.0/60,reduceMotion:false)
         }
         XCTAssertTrue(gait.legs.allSatisfy {!$0.isStepping})
-        XCTAssertLessThan(gait.legs.map {$0.foot.distance(to:stopped)}.max() ?? 0,70)
+        XCTAssertLessThan(gait.legs.map {$0.foot.distance(to:stopped)}.max() ?? 0,85,"Feet settle back near their resting stance (~66–77 pt out)")
     }
     func testRestrictedGaitLandsOnlyOnPermittedAnchors() {
         let anchors=(0...4).map {TerrainAnchor(id:String($0),position:.init(x:Double($0)*40,y:100),kind:.text)}

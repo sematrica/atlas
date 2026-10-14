@@ -25,7 +25,7 @@ Removed: `AtlasCore/Crawler/CrawlerCompanion.swift` (regex guards, fixed tool me
 
 **Ollama** (`AtlasCore/AI/LLMProvider.swift`, new `OllamaProvider.swift`): schema-constrained output with a fallback to JSON mode for Ollama < 0.5; model validation cached for 10 minutes instead of two extra requests per call; one fixed `num_ctx` (8192) so Ollama never reloads the model between calls; `keep_alive` 30 minutes; `profile(model:)` for the fit meter.
 
-**Crawler motion**: `CrawlerLegController.swift` (tetrapod gait, IK knees, dash scuttle above 600 pt/s), `CrawlerNavigator.swift` (curious, coverage-aware wandering instead of row-by-row sweeps), `CrawlerController.swift` (take/release control, pause or stop without cancelling the conversation, travel-speed override, hunt "found" announcement), `CrawlerRenderer.swift` (draws IK knees, clamped feet, body bob, the three creature looks and glowing boxes around touched words).
+**Crawler motion**: `CrawlerLegController.swift` (tetrapod gait on long legs with unhurried, predictive steps, fanned IK knees, dash scuttle above 600 pt/s), `CrawlerNavigator.swift` (curious, coverage-aware wandering instead of row-by-row sweeps), `CrawlerController.swift` (take/release control, pause or stop without cancelling the conversation, travel-speed override, hunt "found" announcement), `CrawlerRenderer.swift` (draws IK knees, clamped feet, body bob, the three creature looks and glowing boxes around touched words).
 
 No new app-target files were added, so `Atlas.xcodeproj` needs no changes. New AtlasCore files are picked up by the Swift package automatically.
 
@@ -76,7 +76,7 @@ With `llama3.1:latest` selected in Ask (the badge should read **Medium?** until 
    - `go to the second longest word` · `take me to the Early life section` · `go to the bottom`
    - Resize the window: highlights must stay. Click × on a legend row, then `clear highlights`.
    - Model requests: `paint every word to do with music in purple`, `what is this article about?`, `open the article on Paris and count its links`, `hunt for the phrase "…"`, `wander`, `faster`, `stop`.
-3. Watch the spider: no legs snapping across the page, knees bending outward, a quick scuttle on long trips, curious wandering rather than rows. By default it should look like a constellation in a dark crystal (white lattice, glass spheres, orange core, haloed head, a slanting beam), and each word or link under a planted foot should get a glowing box with orange-glowing letters that fades into a short trail as it walks. Try each **Look** (Constellation, Neon, Mechanical) and **Touch glow** in the manual tools; the look should be remembered after relaunching.
+3. Watch the spider: a slim body on long legs, no legs snapping across the page or crossing each other, unhurried steps, gliding starts, stops and turns, a pause every few seconds rather than stop-start bursts, a quick scuttle on long trips, curious wandering rather than rows. By default it should look like a constellation in a dark crystal (white lattice, glass spheres, orange core, haloed head, a slanting beam), and each word or link under a planted foot should get a glowing box with orange-glowing letters that fades into a short trail as it walks. Try each **Look** (Constellation, Neon, Mechanical) and **Touch glow** in the manual tools; the look should be remembered after relaunching.
 
 ## Known limits and ideas for next steps
 

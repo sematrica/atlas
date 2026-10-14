@@ -40,13 +40,13 @@ final class CrawlerRenderer:NSView {
         guard !crawler.reduceMotion,let current=visualPosition,current.distance(to:target)<80 else {
             visualPosition=target;return
         }
-        // A short, bounded follow softens sharp steering changes while leaving the feet
-        // planted on their document anchors and the body close to its true position.
-        let blend=1-exp(-dt/0.026)
+        // A short, bounded follow lets the body glide through steering changes while the feet
+        // stay planted on their document anchors and the body stays close to its true position.
+        let blend=1-exp(-dt/0.05)
         var x=current.x+(target.x-current.x)*blend
         var y=current.y+(target.y-current.y)*blend
         let dx=target.x-x,dy=target.y-y,gap=hypot(dx,dy)
-        if gap>7 {x=target.x-dx/gap*7;y=target.y-dy/gap*7}
+        if gap>10 {x=target.x-dx/gap*10;y=target.y-dy/gap*10}
         visualPosition=DocumentPosition(x:x,y:y)
     }
     /// Knees come from the leg controller's inverse kinematics; a swinging leg lifts its knee.
@@ -204,21 +204,21 @@ final class CrawlerRenderer:NSView {
     }
 
     /// A constellation in a dark crystal: a spine of glass spheres with an orange core, a haloed
-    /// head and a slanting beam of light, after a sacred-geometry figure. The legs leave from the
+    /// head and a slanting beam of light, after a sacred-geometry figure; slim, on long legs. The legs leave from the
     /// lattice's side nodes. The crystal carries its own night sky, so the white light shows on white pages.
     private func drawConstellationCreature(_ context:CGContext,at p:DocumentPosition,state:CrawlerState) {
         let spawn=min(1,state.elapsed/0.65)
         let stepBalance=crawler.reduceMotion ? 0 : crawler.legs.legs.enumerated().reduce(0.0) {sum,entry in sum+entry.element.lift*(entry.offset<4 ? 1 : -1)}
         let angle=crawler.legs.heading+stepBalance*0.02,c=cos(angle),s=sin(angle)
-        // Body-local coordinates: x points forward, y to the right; the figure is drawn 10% larger.
+        // Body-local coordinates: x points forward, y to the right; the figure is drawn slim and long.
         func at(_ x:Double,_ y:Double)->CGPoint {
-            let x=x*1.1,y=y*1.1
+            let x=x*1.15
             return CGPoint(x:p.x+c*x-s*y,y:p.y+s*x+c*y)
         }
         func pair(_ x:Double,_ y:Double)->[CGPoint] {[at(x,-y),at(x,y)]}
         let head=at(21.8,0),neck=at(17.4,0),upper=at(9.4,0),hub=at(0,0),lower=at(-7.1,0),core=at(-15.6,0)
         let waist=at(-19.7,0),tail=at(-28.7,0),tailDots=[(at(-37.3,0),1.1),(at(-40.6,0),1.3),(at(-42.5,0),0.6)]
-        let shoulders=pair(11.8,8.7),arms=pair(4.05,8.7),wings=pair(-2.1,13.5),hips=pair(-9.5,8.7),flanks=pair(-22.5,8.7)
+        let shoulders=pair(11.8,5.4),arms=pair(4.05,5.4),wings=pair(-2.1,8.4),hips=pair(-9.5,5.4),flanks=pair(-22.5,5.4)
         let mounts=[shoulders,arms,wings,hips]
         let found=state.behavior == .found
         let ink=Self.ink,light=Self.starlight
@@ -285,11 +285,11 @@ final class CrawlerRenderer:NSView {
         var legLines:[(CGPoint,CGPoint,Double,Double)]=[]
         for i in crawler.legs.legs.indices {
             let mount=mounts[i%4][i<4 ? 0 : 1],knee=point(crawler.legs.knee(i,body:p)),foot=point(crawler.legs.drawnFoot(i,body:p))
-            legLines.append((mount,knee,0.5,0.5));legLines.append((knee,foot,0.5,0.5))
+            legLines.append((mount,knee,0.7,0.62));legLines.append((knee,foot,0.7,0.62))
         }
         lines(legLines,underlay:true);lines(legLines,underlay:false)
         // 2. The crystal: the figure's night sky, with a faint glass rim.
-        let hull=[at(29.5,0),at(13.5,-11.5),at(-2.1,-17),at(-24,-11.5),at(-35,0),at(-24,11.5),at(-2.1,17),at(13.5,11.5)]
+        let hull=[at(29,0),at(13.5,-7.6),at(-2.1,-11.4),at(-24,-7.6),at(-34.5,0),at(-24,7.6),at(-2.1,11.4),at(13.5,7.6)]
         context.saveGState()
         context.setShadow(offset:.zero,blur:8,color:ink.withAlphaComponent(0.55).cgColor)
         context.setFillColor(ink.withAlphaComponent(0.74).cgColor);polygon(hull);context.fillPath()
@@ -325,17 +325,17 @@ final class CrawlerRenderer:NSView {
             context.restoreGState()
         }
         // 5. Nodes, glass spheres, the haloed head and the orange core.
-        for k in 0..<2 {for q in [shoulders[k],arms[k],wings[k],hips[k],flanks[k]] {dot(q,1.35)}}
+        for k in 0..<2 {for q in [shoulders[k],arms[k],wings[k],hips[k],flanks[k]] {dot(q,1.15)}}
         dot(neck,1.25);dot(hub,1.7);dot(waist,1.1)
         for (q,r) in tailDots {dot(q,r)}
-        sphere(upper,3.6);sphere(lower,3.7);sphere(tail,3.8)
+        sphere(upper,3.0);sphere(lower,3.1);sphere(tail,3.2)
         context.saveGState()
         context.setShadow(offset:.zero,blur:3,color:light.withAlphaComponent(0.9).cgColor)
         context.setStrokeColor(light.withAlphaComponent(crawler.conversation.busy ? 1 : 0.8).cgColor);context.setLineWidth(crawler.conversation.busy ? 0.8 : 0.5)
-        context.strokeEllipse(in:CGRect(x:head.x-5.5,y:head.y-5.5,width:11,height:11))
+        context.strokeEllipse(in:CGRect(x:head.x-4.6,y:head.y-4.6,width:9.2,height:9.2))
         context.restoreGState()
         dot(head,1.9)
-        let glow=found ? NSColor.systemGreen : Self.coreOrange,r=4.4*1.1
+        let glow=found ? NSColor.systemGreen : Self.coreOrange,r=3.9
         context.saveGState()
         context.setShadow(offset:.zero,blur:14,color:glow.withAlphaComponent(0.95).cgColor)
         context.setFillColor(glow.cgColor)
@@ -395,12 +395,12 @@ final class CrawlerRenderer:NSView {
         context.saveGState()
         context.setAlpha(spawn)
         context.translateBy(x:p.x,y:p.y);context.rotate(by:crawler.legs.heading+stepBalance*0.02)
-        let body=CGRect(x:-12,y:-6,width:24,height:12)
+        let body=CGRect(x:-13,y:-4,width:26,height:8)
         context.setFillColor(NSColor(calibratedRed:0.03,green:0.05,blue:0.08,alpha:0.92).cgColor);context.fill(body)
         context.setShadow(offset:.zero,blur:6,color:limb.withAlphaComponent(0.8).cgColor)
         context.setStrokeColor(limb.cgColor);context.setLineWidth(1.5);context.stroke(body)
         context.setFillColor(limb.withAlphaComponent(crawler.conversation.busy ? 1 : 0.85).cgColor)
-        context.fillEllipse(in:CGRect(x:4,y:-2.6,width:5.2,height:5.2))
+        context.fillEllipse(in:CGRect(x:5,y:-2.1,width:4.2,height:4.2))
         context.restoreGState()
     }
 }

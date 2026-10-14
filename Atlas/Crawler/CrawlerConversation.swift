@@ -54,7 +54,9 @@ final class CrawlerConversation {
     var layers:[HighlightLayer]=[]
     var results:[CompanionResult]=[]
     var focusResult:String?
-    var speed=270.0
+    /// Wandering pace in points per second: unhurried by default.
+    static let normalSpeed=200.0
+    var speed=normalSpeed
     var rules=CrawlerTravelRules()
     var excludedSections:[String]=[]
     /// True while a plan moves the spider, so wandering and hunting yield to it.
@@ -282,7 +284,7 @@ final class CrawlerConversation {
             switch step.speed {
             case "faster": speed=min(540,speed*1.5)
             case "slower": speed=max(45,speed/1.5)
-            default: speed=270
+            default: speed=Self.normalSpeed
             }
             say(step.speed == "normal" ? "Back to my normal pace." : "Speed: \(Int(speed)) points per second.")
         case "rule":
