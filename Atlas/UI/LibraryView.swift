@@ -10,7 +10,7 @@ struct LibraryView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Sematrica")
                         .font(.system(size: 32, weight: .medium, design: .serif))
-                    Text("Keep Wikipedia on your Mac or an external drive. Your library stays where you choose.")
+                    Text("Keep Wikipedia, dictionaries, books and more on your Mac or an external drive. Your library stays where you choose.")
                         .font(.body).foregroundStyle(.secondary)
                 }
                 switch model.state {

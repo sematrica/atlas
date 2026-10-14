@@ -91,7 +91,7 @@ final class CrawlerConversation {
     /// True while a plan moves the spider, so wandering and hunting yield to it.
     var guiding=false
     var isGuiding:Bool {guiding || touring}
-    var companionTitle:String {crawler?.ready == true ? (crawler?.intelligence.browser?.title ?? "Wikipedia") : "No article open"}
+    var companionTitle:String {crawler?.ready == true ? (crawler?.intelligence.browser?.title ?? "Article") : "No article open"}
     var focused:CompanionResult? {focusResult.flatMap {id in results.first {$0.id == id}}}
 
     @ObservationIgnored private var task:Task<Void,Never>?
@@ -675,7 +675,7 @@ final class CrawlerConversation {
     }
 
     private func open(_ title:String,page:CrawlerPageMap?,token:UUID) async throws -> CrawlerPageMap? {
-        guard let browser=crawler?.intelligence.browser,let provider=browser.provider else {say("Open a Wikipedia package in Library first.");return page}
+        guard let browser=crawler?.intelligence.browser,let provider=browser.provider else {say("Open a package in Library first.");return page}
         let wanted=title.trimmingCharacters(in:.whitespacesAndNewlines)
         guard !wanted.isEmpty else {say("Which article should I open?");return page}
         status="Searching for “\(wanted)”…"
@@ -733,7 +733,7 @@ final class CrawlerConversation {
     /// candidate is read and counted exactly. Long questions stop after a batch and can continue.
     private func library(_ step:CompanionStep,page:CrawlerPageMap?,local:Bool,token:UUID) async throws {
         guard let browser=crawler?.intelligence.browser,let record=browser.record,let source=browser.provider as? any LibraryArticleSource else {
-            say("Open a Wikipedia package in Library first.");return
+            say("Open a package in Library first.");return
         }
         var run:LibraryRun
         if step.result == "more" {
@@ -792,7 +792,7 @@ final class CrawlerConversation {
     /// in each article it goes to the link that leads on, lights it and follows it.
     private func connect(_ step:CompanionStep,local:Bool,token:UUID) async throws {
         guard let browser=crawler?.intelligence.browser,let record=browser.record,let source=browser.provider as? any LibraryArticleSource else {
-            say("Open a Wikipedia package in Library first.");return
+            say("Open a package in Library first.");return
         }
         var run:ConnectionRun
         if step.result == "more" {

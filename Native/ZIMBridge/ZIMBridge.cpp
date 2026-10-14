@@ -91,6 +91,12 @@ int az_fulltext_page(AZArchive archive,const char *query,int offset,int limit,AZ
         copyMatches(rows,matches,count);return 1;
     } AZ_CATCH
 }
+int az_metadata(AZArchive archive,const char *name,char **value,char **error) {
+    try { *value=strdup(static_cast<Reader *>(archive)->archive.getMetadata(name ? name : "").c_str()); return 1; } AZ_CATCH
+}
+int az_uuid(AZArchive archive,char **value) {
+    try { *value=strdup(static_cast<std::string>(static_cast<Reader *>(archive)->archive.getUuid()).c_str()); return 1; } catch(...) { return 0; }
+}
 int az_resolve_paths(AZArchive archive,const char *const *paths,int count,AZMatch **matches,int *resolved,char **error) {
     try {
         auto& a=static_cast<Reader *>(archive)->archive;

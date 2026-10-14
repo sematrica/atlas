@@ -21,7 +21,7 @@ struct BrowserView: View {
                         ForEach(library.installed.filter {$0.package.format == .zim && $0.state == .installed}) { record in
                             Button("\(record.package.language) · \(record.package.name) · \(record.package.version)") { Task { await library.open(record) } }
                         }
-                    } label: { Label(browser.record?.package.name ?? "Open Wikipedia",systemImage:"book") }
+                    } label: { Label(browser.record?.package.name ?? "Open a package",systemImage:"book") }
                     Button {showCrawler.toggle()} label: {CompanionToolbarLabel(active:showCrawler || emphasizeCrawl,busy:browser.crawler.conversation.busy)}
                         .buttonStyle(.plain).help(showCrawler ? "Hide the companion" : "Show the companion")
                     Spacer()
@@ -65,7 +65,7 @@ struct BrowserView: View {
                     HSplitView {
                         if showSearch || emphasizeSearch {
                             VStack(alignment:.leading,spacing:12) {
-                                Text("Search this Wikipedia").font(.headline)
+                                Text("Search this package").font(.headline)
                                 TextField("Article title",text:$browser.query).textFieldStyle(.roundedBorder)
                                     .onChange(of:browser.query) { browser.search() }
                                 if browser.searching { ProgressView().controlSize(.small) }
@@ -83,7 +83,7 @@ struct BrowserView: View {
                     .frame(width:area.size.width,height:area.size.height)
                     }
                 } else {
-                    ContentUnavailableView("Open your offline Wikipedia",systemImage:"book.closed",
+                    ContentUnavailableView("Open your offline library",systemImage:"book.closed",
                                            description:Text(library.storageAvailable ? "Download a browsable package in Library, then choose Open. Installed packages also appear in the menu above." : "Choose or reconnect your library storage to browse offline articles."))
                 }
     }

@@ -13,7 +13,7 @@ final class BrowserModel {
     }
     init() {crawler.intelligence.browser=self}
     func openCitation(_ passage:RetrievedPassage) {
-        guard record?.id == passage.article.packageID else {message="Open the source Wikipedia package first.";return}
+        guard record?.id == passage.article.packageID else {message="Open the source package first.";return}
         pendingCitation=passage;navigate(passage.article.path)
     }
     func identifyCitation() {
@@ -32,7 +32,7 @@ final class BrowserModel {
     @ObservationIgnored private var access: LibraryAccess?
     @ObservationIgnored private var textIndex: ResearchStore?
     var webView: WKWebView?
-    var title="Offline Wikipedia"
+    var title="Offline library"
     var query=""
     var results: [SearchResult] = []
     var searchMessage: String?
@@ -59,7 +59,7 @@ final class BrowserModel {
     func close() {
         crawler.stop();crawler.ready=false;pendingCitation=nil
         searchTask?.cancel(); webView?.navigationDelegate=nil; webView?.stopLoading(); webView?.configuration.userContentController.removeAllScriptMessageHandlers()
-        webView=nil; provider=nil; record=nil; access=nil; textIndex=nil; results=[]; headings=[]; message=nil; query=""; title="Offline Wikipedia"
+        webView=nil; provider=nil; record=nil; access=nil; textIndex=nil; results=[]; headings=[]; message=nil; query=""; title="Offline library"
         canGoBack=false; canGoForward=false; loading=false; searching=false; sessionID=UUID()
     }
     /// The Research text index for the open package (opened on first use), or nil.

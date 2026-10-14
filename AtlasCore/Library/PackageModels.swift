@@ -5,6 +5,7 @@ import OSLog
 public enum AtlasError: LocalizedError {
     case storageUnavailable, invalidPath, catalogUnavailable, insufficientSpace, invalidResponse, resumeRejected
     case checksumMismatch, incompleteDownload, articleUnavailable, searchUnavailable, unsupportedArchive, busy, invalidManifest
+    case notZIM, alreadyInLibrary, importInterrupted
     public var errorDescription: String? {
         switch self {
         case .storageUnavailable: "Reconnect your library drive or choose its folder again."
@@ -20,6 +21,9 @@ public enum AtlasError: LocalizedError {
         case .unsupportedArchive: "This dataset is archive-only and cannot be browsed in Sematrica."
         case .busy: "Wait for the current package operation to finish."
         case .invalidManifest: "The package manifest could not be read. Existing files have been preserved."
+        case .notZIM: "This file isn’t a ZIM archive Sematrica can open."
+        case .alreadyInLibrary: "This package is already in your library."
+        case .importInterrupted: "This import was interrupted. Remove it and import the file again."
         }
     }
 }
@@ -55,16 +59,21 @@ public struct WikipediaPackage: Identifiable, Codable, Equatable, Sendable {
     public let format: PackageFormat
     public let source: String
     public let family: String
+    /// The Kiwix collection it comes from ("wikipedia", "wiktionary", "gutenberg"…); nil for
+    /// Wikimedia archives, imported files and packages recorded before collections existed.
+    public var category: String?
     public var language: String { Locale.current.localizedString(forLanguageCode: languageCode) ?? languageCode }
     public var storageKey: String { SHA256.hash(data: Data(id.utf8)).map { String(format: "%02x", $0) }.joined() }
     public var capabilities: String { format == .zim ? "Browsable · Title search" : "Archive only" }
     public init(id: String, name: String, languageCode: String, kind: PackageKind, summary: String, version: String,
                 downloadURL: URL, downloadBytes: Int64, checksum: PackageChecksum? = nil, format: PackageFormat,
-                source: String, family: String) {
+                source: String, family: String, category: String? = nil) {
         self.id=id; self.name=name; self.languageCode=languageCode; self.kind=kind; self.summary=summary; self.version=version
         self.downloadURL=downloadURL; self.downloadBytes=downloadBytes; self.checksum=checksum; self.format=format
-        self.source=source; self.family=family
+        self.source=source; self.family=family; self.category=category
     }
+    /// Copied in from a file the user chose, not downloaded.
+    public var isImported: Bool { source == PackageImport.source }
 }
 extension PackageKind {
     public var label: String {

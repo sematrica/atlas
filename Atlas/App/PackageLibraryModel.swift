@@ -11,7 +11,12 @@ final class PackageLibraryModel {
     var records: [PackageRecord] = []
     var progress: [String:TransferProgress] = [:]
     var language = "eng"
-    var catalogSource = "Wikipedia"
+    /// Kiwix (the openZIM catalog, every collection) or Archives (Wikimedia dumps).
+    var catalogSource = "Kiwix"
+    /// The Kiwix collection being browsed; the list is replaced by the catalog's own once it loads.
+    var collection = "wikipedia"
+    var collections = KiwixCollection.defaults
+    var importing=false
     var dumpProject = "enwiki"
     var loadingCatalog=false
     var busyPackages: Set<String> = []
@@ -23,6 +28,7 @@ final class PackageLibraryModel {
     private let source=PackageCatalog()
     private var polling: Task<Void,Never>?
     private var libraryID: UUID?
+    private var collectionsLoaded=false
     init(storage: StorageManager) {
         self.storage=storage; downloads=DownloadManager(storage:storage);intelligence=IntelligenceModel(storage:storage);research=ResearchModel(storage:storage)
         browser.crawler.intelligence.provider=intelligence.provider
@@ -71,7 +77,16 @@ final class PackageLibraryModel {
         guard !loadingCatalog else { return }
         loadingCatalog=true; defer { loadingCatalog=false }
         do {
-            let next = try await (catalogSource == "Wikipedia" ? source.wikipedia() : source.wikimedia(project:dumpProject.lowercased()))
+            let next: [WikipediaPackage]
+            if catalogSource == "Kiwix" {
+                if !collectionsLoaded, let list=try? await source.kiwixCollections(), !list.isEmpty {
+                    collections=list; collectionsLoaded=true
+                    if !list.contains(where:{$0.id == collection}) { collection="wikipedia" }
+                }
+                next=try await source.kiwix(collection:collection)
+            } else {
+                next=try await source.wikimedia(project:dumpProject.lowercased())
+            }
             catalog=next
             if !language.isEmpty && !languages.contains(language) { language="" }
             message=nil
@@ -82,6 +97,19 @@ final class PackageLibraryModel {
         busyPackages.insert(package.id); defer { busyPackages.remove(package.id) }
         do { let resolved=try await source.resolve(package); try await downloads.start(resolved); message=nil; await refresh() }
         catch { message=AtlasLog.message(error) }
+    }
+    /// Brings a ZIM file the user chose into the library: it's opened to check it's a ZIM and read
+    /// its title and language, then copied in, verified and listed with the installed packages.
+    func importFile(_ url: URL) async {
+        guard !importing else { return }
+        importing=true; defer { importing=false }
+        do {
+            let info=try await Task.detached { try ZIMArticleProvider.fileInfo(at:url) }.value
+            let size=Int64((try url.resourceValues(forKeys:[.fileSizeKey])).fileSize ?? 0)
+            guard size > 0 else { throw AtlasError.notZIM }
+            try await downloads.importArchive(from:url,package:PackageImport.package(for:info,file:url,size:size))
+            message=nil; await refresh()
+        } catch { message=AtlasLog.message(error) }
     }
     func pause(_ id: String) async { await downloads.pause(id); await refresh() }
     func resume(_ id: String) async {

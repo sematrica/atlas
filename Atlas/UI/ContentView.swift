@@ -15,7 +15,7 @@ private enum Destination: String, CaseIterable, Identifiable {
     }
     var subtitle: String {
         switch self {
-        case .library: "Offline Wikipedia library"
+        case .library: "Offline library"
         case .browse: "An encyclopedia, entirely yours."
         case .search: "A direct route to what you need."
         case .ask: "Answers grounded in your library."
@@ -26,7 +26,7 @@ private enum Destination: String, CaseIterable, Identifiable {
     var detail: String {
         switch self {
         case .library: ""
-        case .browse: "Read local Wikipedia articles, follow their links, and pick up where you left off."
+        case .browse: "Read local articles, follow their links, and pick up where you left off."
         case .search: "Find titles and passages with fast, conventional full-text search. No language model required."
         case .ask: "Explore questions with a local model and citations that lead back to your offline articles."
         case .research: "Autonomous reading, evidence, and cited reports."

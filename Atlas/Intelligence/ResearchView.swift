@@ -99,7 +99,7 @@ struct ResearchView:View {
         ScrollView {
             VStack(alignment:.leading,spacing:18) {
                 Text("Research Sematrica").font(.system(size:32,weight:.medium,design:.serif))
-                Text("Independent research across your open offline Wikipedia package. Saved evidence, resumable reading, and cited reports.").foregroundStyle(.secondary)
+                Text("Independent research across your open offline package. Saved evidence, resumable reading, and cited reports.").foregroundStyle(.secondary)
                 GroupBox("Archive search") {
                     VStack(alignment:.leading,spacing:8) {
                         Text(research.scope)

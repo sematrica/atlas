@@ -9,11 +9,15 @@ The project was first called Atlas. Internal names keep it: the `Atlas` app targ
 Open `Atlas.xcodeproj` in Xcode, select **Atlas / My Mac**, and Run. The app uses development ad-hoc signing and App Sandbox. OpenZIM is already vendored; no Homebrew packages, local server, Python runtime or external reader app are required by Sematrica.
 
 1. In Library, choose a dedicated folder on your SSD, such as `/Volumes/SamsungT7/Sematrica`.
-2. Under **Available**, choose **Wikipedia (Kiwix)** and **Load Catalog**. Select a language. Packages are sorted smallest first.
+2. Under **Available**, choose **Kiwix library**, pick a **Collection** (Wikipedia by default) and **Load Catalog**. Select a language. Packages are sorted smallest first.
 3. Choose **Download**. For a quick test, the English **Ray Charles** selection with images was about 3 MB in the catalog used during development. Availability, release dates, exact sizes and URLs are discovered live; this is not a pinned application package.
 4. Watch **Downloading** for saved bytes, speed, ETA and verification. Use Pause, Resume/Retry, or Cancel Download as needed.
 5. Under **Installed**, choose **Open**. Search for an article title, open a result, follow article links, and use Back, Forward and Contents.
 6. Disconnect Internet access. Continue searching and reading the installed package. Catalog refresh and downloads need Internet; the reader does not.
+
+Beyond Wikipedia, the **Collection** menu lists everything the Kiwix catalog offers that Sematrica can read: Wiktionary, Wikibooks, Wikisource, Wikivoyage, Wikiquote, Wikiversity, Project Gutenberg's public-domain books, Stack Exchange Q&A and more. The list comes from the catalog itself; collections made of video or interactive simulations (TED, PhET) are left out because Sematrica doesn't run archive scripts.
+
+To add a ZIM file you already have (one you made, or downloaded elsewhere), choose **Import ZIM File…**. Sematrica opens it to check it's a readable ZIM and read its title and language, copies it into the library's `packages/` folder, verifies it and lists it under **Installed**. The original file is never changed. An import can't be paused or resumed; if it's cancelled or interrupted, remove it and import the file again.
 
 For advanced datasets, choose **Wikimedia archives**, enter a Wikimedia project identifier such as `enwiki` or `simplewiki`, and load the catalog. These are downloaded and checksum-verified under `dumps/`, but are labeled **Archive only / Stored**. Sematrica does not import or render raw XML/SQL/history dumps.
 
@@ -51,7 +55,7 @@ Browsing, conventional search, the companion and the crawler keep separate inter
 
 ### Catalog sources
 
-[Kiwix OPDS v2](https://kiwix-tools.readthedocs.io/en/latest/kiwix-serve.html) is fetched from `https://opds.library.kiwix.org/catalog/v2/entries`, filtered to Wikipedia and paginated. Titles, languages, snapshot dates, descriptions, flavor tags, sizes and acquisition links come from this feed. Language choices are derived from returned entries. Mini packages are explicitly labeled abridged. Kiwix flavors are mapped to text-only, standard/images or full/images without inventing unavailable variants.
+[Kiwix OPDS v2](https://kiwix-tools.readthedocs.io/en/latest/kiwix-serve.html) is fetched from `https://opds.library.kiwix.org/catalog/v2/entries`, filtered to the chosen collection and paginated. The collections themselves come from `https://opds.library.kiwix.org/catalog/v2/categories`; until that list loads, a built-in list of the familiar ones is shown. Titles, languages, snapshot dates, descriptions, flavor tags, sizes and acquisition links come from this feed. Language choices are derived from returned entries. Mini packages are explicitly labeled abridged. Kiwix flavors are mapped to text-only, standard/images or full/images without inventing unavailable variants.
 
 Current acquisition links use Metalink. Sematrica parses their exact byte count, full-file SHA-256/SHA-1/MD5 and HTTPS mirror URLs; it does not mistake piece hashes for a full-file checksum. The first prioritized HTTPS mirror is used. Catalog sizes may be rounded; the resolved exact size is used for downloading and verification.
 
@@ -167,7 +171,7 @@ Stage 1 files modified:
 
 Files added:
 
-- `AtlasCore/Library/PackageModels.swift`, `PackageCatalog.swift`, `PackageManifest.swift`, `StreamTransfer.swift`, `DownloadManager.swift`, `FileVerifier.swift`.
+- `AtlasCore/Library/PackageModels.swift`, `PackageCatalog.swift` (with `KiwixCollection`), `PackageManifest.swift`, `StreamTransfer.swift`, `DownloadManager.swift` (downloads and imports), `FileVerifier.swift`, `PackageImport.swift` (what an imported file becomes, and the copy).
 - `AtlasCore/Wikipedia/ZIMArticleProvider.swift`, `OfflineURL.swift`.
 - `Atlas/App/PackageLibraryModel.swift`, `BrowserModel.swift`.
 - `Atlas/UI/PackagesView.swift`, `BrowserView.swift`, `OfflineWebView.swift`.

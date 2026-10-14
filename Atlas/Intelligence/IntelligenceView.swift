@@ -10,7 +10,7 @@ struct IntelligenceView:View {
         ScrollView {
             VStack(alignment:.leading,spacing:22) {
                 Text("Ask Sematrica").font(.system(size:32,weight:.medium,design:.serif))
-                Text("Answers from your offline Wikipedia, with passages you can inspect.").foregroundStyle(.secondary)
+                Text("Answers from your offline library, with passages you can inspect.").foregroundStyle(.secondary)
                 GroupBox("Local intelligence") {
                     VStack(alignment:.leading,spacing:10) {
                         Text(ai.connection).font(.caption)

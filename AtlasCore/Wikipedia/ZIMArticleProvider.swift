@@ -108,3 +108,26 @@ public actor ZIMArticleProvider: ResearchArticleProvider, LibraryArticleSource {
         guard az_validate(handle,&error) != 0 else { throw AtlasError.checksumMismatch }
     }
 }
+
+extension ZIMArticleProvider {
+    /// Opens a ZIM file outside the library just long enough to read what it says about itself.
+    /// Throws when libzim can't open it, so a damaged or non-ZIM file is refused before anything is copied.
+    public static func fileInfo(at url: URL) throws -> ZIMFileInfo {
+        var error: UnsafeMutablePointer<CChar>?
+        let opened=az_open(url.path,&error)
+        az_free(error)
+        guard let archive=opened else { throw AtlasError.notZIM }
+        defer { az_close(archive) }
+        func value(_ key: String) -> String {
+            var text: UnsafeMutablePointer<CChar>?; var failure: UnsafeMutablePointer<CChar>?
+            defer { az_free(text); az_free(failure) }
+            guard az_metadata(archive,key,&text,&failure) != 0, let text else { return "" }
+            return String(cString: text)
+        }
+        var uuid: UnsafeMutablePointer<CChar>?
+        defer { az_free(uuid) }
+        let identity=az_uuid(archive,&uuid) != 0 ? uuid.map { String(cString: $0) } ?? "" : ""
+        return ZIMFileInfo(uuid: identity, title: value("Title"), name: value("Name"), language: value("Language"), description: value("Description"),
+                           date: value("Date"), flavour: value("Flavour"), tags: value("Tags"))
+    }
+}

@@ -152,7 +152,7 @@ final class IntelligenceModel {
         Task {await task?.value;do {try await index?.cancelQueue();if let index {progress=await index.snapshot()}}catch {message=error.localizedDescription}}
     }
     func ask(browser:BrowserModel) {
-        guard !answering,let record=browser.record else {message="Open an installed Wikipedia package first.";return}
+        guard !answering,let record=browser.record else {message="Open an installed package first.";return}
         let text=question.trimmingCharacters(in:.whitespacesAndNewlines)
         guard !text.isEmpty else {return}
         let token=generation;answering=true;answer="";evidence=[];lastQuestion=text;message=nil
