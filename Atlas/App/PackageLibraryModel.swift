@@ -75,7 +75,16 @@ final class PackageLibraryModel {
         }
     }
     var languages: [String] { Array(Set(catalog.map(\.languageCode))).sorted() }
-    var filteredCatalog: [WikipediaPackage] { catalog.filter { language.isEmpty || $0.languageCode == language } }
+    /// Words a package's name must contain ("simple", "nopic"), to find one among hundreds.
+    var catalogFilter = ""
+    var filteredCatalog: [WikipediaPackage] {
+        let words=catalogFilter.lowercased().split(whereSeparator:\.isWhitespace).map(String.init)
+        return catalog.filter { package in
+            guard language.isEmpty || package.languageCode == language else { return false }
+            let text=(package.name+" "+package.family+" "+package.summary).lowercased()
+            return words.allSatisfy { text.contains($0) }
+        }
+    }
     var installed: [PackageRecord] { records.filter {$0.state == .installed || $0.state == .corrupted} }
     /// Installed packages Browse can open.
     var readable: [PackageRecord] { installed.filter {$0.package.format == .zim && $0.state == .installed} }

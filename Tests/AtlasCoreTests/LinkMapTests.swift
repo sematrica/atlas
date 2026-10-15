@@ -378,6 +378,18 @@ final class LinkMapAnswerTests:XCTestCase {
         XCTAssertTrue(LinkMapLibrary.missingMap(project:nil,for:"Category questions").contains("only in a Wikipedia package"))
     }
 
+    /// A failed build says why, instead of a generic "couldn't access the library files".
+    func testErrorsSayWhatWentWrong() {
+        for error in [LinkMapError.needsLinkTargets,.insufficientSpace,.missingTables(["redirect"])] {
+            XCTAssertEqual(AtlasLog.message(error),error.errorDescription)
+        }
+        XCTAssertEqual(AtlasLog.message(SQLDumpError.missingColumn("page","page_title")),SQLDumpError.missingColumn("page","page_title").errorDescription)
+        XCTAssertEqual(AtlasLog.message(AtlasError.notZIM),AtlasError.notZIM.errorDescription)
+        let denied=AtlasLog.message(CocoaError(.fileWriteNoPermission))
+        XCTAssertTrue(denied.hasPrefix("Sematrica couldn’t access the library files ("),denied)
+        XCTAssertTrue(AtlasLog.message(CocoaError(.fileWriteOutOfSpace)).contains("enough free space"))
+    }
+
     func testDumpSetsAndDownloads() throws {
         func archive(_ name:String,date:String)->WikipediaPackage {
             WikipediaPackage(id:"wikimedia:"+name,name:name,languageCode:"en",kind:.rawDump,summary:"",version:date,

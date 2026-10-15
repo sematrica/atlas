@@ -46,19 +46,36 @@ struct PackagesView: View {
                         }.frame(maxWidth:280).disabled(model.loadingCatalog)
                         .onChange(of:model.collection) { if !model.catalog.isEmpty { model.catalog=[]; Task { await model.loadCatalog() } } }
                     }
-                    if model.catalogSource == "Archives" { TextField("Project, e.g. enwiki",text:$model.dumpProject).textFieldStyle(.roundedBorder) }
+                    if model.catalogSource == "Archives" {
+                        TextField("Project, e.g. enwiki",text:$model.dumpProject).textFieldStyle(.roundedBorder)
+                            .onSubmit { Task { await model.loadCatalog() } }
+                    }
                     Button(model.catalog.isEmpty ? "Load Catalog" : "Refresh Catalog") { Task { await model.loadCatalog() } }.disabled(model.loadingCatalog)
                     if model.loadingCatalog { ProgressView().controlSize(.small) }
                 }
                 if model.catalogSource == "Kiwix",let summary=model.collections.first(where:{$0.id == model.collection})?.summary,!summary.isEmpty {
                     Text(summary).font(.caption).foregroundStyle(.secondary)
                 }
+                if model.catalogSource == "Archives" {
+                    // Each Wikimedia catalog is one wiki, so its language is the project's.
+                    Text("One wiki per catalog: type its project and press Return. enwiki is English, simplewiki Simple English, frwiki French, dewiki German, eswiki Spanish, jawiki Japanese, and so on.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
+                }
                 if !model.linkMapFiles.isEmpty { linkMapDownload }
                 if !model.catalog.isEmpty {
-                    Picker("Language",selection:$model.language) {
-                        Text("All languages").tag("")
-                        ForEach(model.languages,id:\.self) { code in Text("\(Locale.current.localizedString(forLanguageCode:code) ?? code) (\(code))").tag(code) }
-                    }.frame(maxWidth:350)
+                    HStack {
+                        if model.catalogSource == "Kiwix" {
+                            Picker("Language",selection:$model.language) {
+                                Text("All languages").tag("")
+                                ForEach(model.languages,id:\.self) { code in Text("\(Locale.current.localizedString(forLanguageCode:code) ?? code) (\(code))").tag(code) }
+                            }.frame(maxWidth:350)
+                        }
+                        TextField(model.catalogSource == "Kiwix" ? "Filter, e.g. simple or nopic" : "Filter, e.g. pagelinks",text:$model.catalogFilter)
+                            .textFieldStyle(.roundedBorder).frame(maxWidth:260)
+                    }
+                    if model.catalogSource == "Kiwix",model.language == "eng" {
+                        Text("Simple English Wikipedia is listed under English: filter by “simple” to find it.").font(.caption).foregroundStyle(.secondary)
+                    }
                     Text("\(model.filteredCatalog.count) packages · smallest first · sizes from the official catalog")
                         .font(.caption).foregroundStyle(.secondary)
                     LazyVStack(alignment:.leading,spacing:0) {

@@ -36,7 +36,13 @@ public enum AtlasLog {
         let cocoa = error as NSError
         if cocoa.domain == NSCocoaErrorDomain && cocoa.code == NSFileWriteOutOfSpaceError { return AtlasError.insufficientSpace.localizedDescription }
         if cocoa.domain == NSURLErrorDomain { return "The connection was interrupted. Check your network and resume the download." }
-        return "Sematrica couldn’t access the library files. Reconnect the drive, check its permissions, and try again."
+        // File errors: say what the system said, not just that something failed.
+        if cocoa.domain == NSCocoaErrorDomain || cocoa.domain == NSPOSIXErrorDomain {
+            return "Sematrica couldn’t access the library files (\(cocoa.localizedDescription)) Reconnect the drive, check its permissions, and try again."
+        }
+        // Errors that explain themselves: link maps, table dumps, the companion.
+        if let described = error as? LocalizedError, let text = described.errorDescription, !text.isEmpty { return text }
+        return "Something went wrong: \(cocoa.localizedDescription)"
     }
 }
 public enum PackageFormat: String, Codable, Sendable { case zim, archive }
