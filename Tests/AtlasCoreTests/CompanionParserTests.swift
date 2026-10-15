@@ -346,6 +346,63 @@ final class LinkMapParserTests:XCTestCase {
         }
     }
 
+    func testSubcategories() {
+        for request in ["how many articles are in the category Jazz musicians including subcategories","How many articles are in Jazz musicians and its subcategories?",
+                        "which articles are in Category:Jazz musicians or any of its subcategories","list the articles in the Jazz musicians category including sub-categories",
+                        "how many pages are in category Jazz musicians, counting subcategories"] {
+            let found=step(request)
+            XCTAssertEqual(found?.action,"category",request)
+            XCTAssertEqual(found?.title,"Jazz musicians",request)
+            XCTAssertEqual(found?.subcategories,true,request)
+            XCTAssertTrue(found?.problems.isEmpty == true,request)
+        }
+        XCTAssertNil(step("how many articles are in the category Jazz musicians")?.subcategories,"only when asked")
+        for request in ["what are the subcategories of Jazz musicians","list the subcategories of Category:Jazz musicians","which subcategories does Jazz musicians have",
+                        "how many subcategories does the Jazz musicians category have","show me the sub categories of Jazz musicians","subcategories of Jazz musicians"] {
+            let found=step(request)
+            XCTAssertEqual(found?.action,"category",request)
+            XCTAssertEqual(found?.title,"Jazz musicians",request)
+            XCTAssertEqual(found?.measure,"subcategories",request)
+        }
+        for request in ["what are the parent categories of Jazz pianists","which categories contain the category Jazz pianists","what categories is the category Jazz pianists in"] {
+            let found=step(request)
+            XCTAssertEqual(found?.action,"category",request)
+            XCTAssertEqual(found?.title,"Jazz pianists",request)
+            XCTAssertEqual(found?.measure,"parents",request)
+        }
+    }
+
+    func testOtherLanguages() {
+        for (request,measure,language,from) in [("what is this article called in French","name","French",nil),("What's this called in Japanese?","name","Japanese",nil),
+                                                ("what is Paris called in German","name","German","Paris"),("what is the French title of this article","name","French",nil),
+                                                ("is this article available in Spanish","name","Spanish",nil),
+                                                ("which languages is this article in","list",nil,nil),("what other languages is Ray Charles available in","list",nil,"Ray Charles"),
+                                                ("in which languages is this article","list",nil,nil),("other languages","list",nil,nil),
+                                                ("open this in French","open","French",nil),("read this article in German","open","German",nil),("switch to French","open","French",nil),
+                                                ("open the Japanese version","open","Japanese",nil),("open the French version of Ray Charles","open","French","Ray Charles"),
+                                                ("open Paris in French","open","French","Paris"),("show me this in Simple English","open","Simple English",nil),
+                                                ("go to the German version","open","German",nil)] as [(String,String,String?,String?)] {
+            let found=step(request)
+            XCTAssertEqual(found?.action,"language",request)
+            XCTAssertEqual(found?.measure,measure,request)
+            XCTAssertEqual(found?.language,language,request)
+            XCTAssertEqual(found?.from,from,request)
+            XCTAssertTrue(found?.problems.isEmpty == true,"\(request): \(found?.problems ?? [])")
+        }
+        // Not language requests: no language, or not about the article.
+        for request in ["open this in a new window","show me the nouns in French","highlight the verbs in green","what is this called"] {
+            XCTAssertNotEqual(CompanionLocalParser.parse(request)?.steps.first?.action,"language",request)
+        }
+        var model=CompanionStep(action:"other languages");model.place="French";model.measure="read it"
+        XCTAssertEqual(model.normalized()?.action,"language")
+        XCTAssertEqual(model.normalized()?.language,"French")
+        XCTAssertEqual(model.normalized()?.measure,"open")
+        var open=CompanionStep(action:"language");open.measure="open"
+        XCTAssertFalse(open.problems.isEmpty,"opening needs the language")
+        XCTAssertTrue(CompanionPlan.schemaJSON.contains("\"subcategories\""))
+        XCTAssertTrue(CompanionPlan.schemaJSON.contains("\"parents\",\"name\",\"open\""))
+    }
+
     func testOtherQuestionsAreNotCategoryQuestions() {
         XCTAssertEqual(CompanionLocalParser.parse("how many articles mention Atlantic Records")?.steps.first?.action,"library")
         XCTAssertEqual(CompanionLocalParser.parse("which articles link to Paris")?.steps.first?.action,"library")

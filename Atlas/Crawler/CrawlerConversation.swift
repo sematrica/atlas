@@ -345,6 +345,8 @@ final class CrawlerConversation {
             try await connect(step,local:local,token:token)
         case "category":
             try await category(step,local:local,token:token)
+        case "language":
+            try await language(step,local:local,token:token)
         default:
             say("I don't know how to “\(step.action)” yet.")
         }
@@ -886,11 +888,32 @@ final class CrawlerConversation {
         }
         if let name=step.title {
             guard let category=map.category(name) else {say("There's no category called “\(name)” with articles in it in \(map.sourceName).");return}
-            let members=await Task.detached {map.membersByPopularity(category)}.value
+            if step.measure == "subcategories" || step.measure == "parents" || step.subcategories == true {
+                guard map.hasSubcategories else {say(map.subcategoriesMissing);return}
+            }
+            if step.measure == "subcategories" || step.measure == "parents" {
+                let line=say(step.measure == "parents" ? map.parentsAnswer(category) : map.subcategoriesAnswer(category))
+                if local {amend(line,trail:"understood instantly")}
+                return
+            }
             let prefix=browser.currentArticleID?.path.hasPrefix("A/") == true ? "A/" : ""
+            let list=step.measure == "list"
+            let members:[Int32],answer:String
+            if step.subcategories == true {
+                // Follow the subcategories off the main thread: a broad category holds thousands.
+                status="Following its subcategories…"
+                let deep=await Task.detached {() -> (CategoryTree,[Int32]) in
+                    let tree=map.categoryTree(category)
+                    return (tree,map.membersByPopularity(of:tree))
+                }.value
+                members=deep.1;answer=map.categoryTreeAnswer(category,tree:deep.0,members:members,list:list)
+            } else {
+                members=await Task.detached {map.membersByPopularity(category)}.value
+                answer=map.categoryAnswer(category,members:members,list:list)
+            }
             let hits=try await map.hits(members,in:source,prefix:prefix)
             try checkpoint(token)
-            let line=say(map.categoryAnswer(category,members:members,list:step.measure == "list"))
+            let line=say(answer)
             if local {amend(line,trail:"understood instantly")}
             if !hits.isEmpty,let index=lines.firstIndex(where:{$0.id == line}) {
                 lines[index].library=LibraryLine(hits:hits,matchingArticles:members.count,query:nil,canContinue:false,counted:false)
@@ -907,6 +930,56 @@ final class CrawlerConversation {
         guard let node=found else {say("“\(name)” isn't in \(map.sourceName). It may be newer than the dump.");return}
         try checkpoint(token)
         let line=say(map.categoriesAnswer(of:node))
+        if local {amend(line,trail:"understood instantly")}
+    }
+
+    // MARK: Other languages
+
+    /// The article in other languages' Wikipedias, from the link map: what it's called there, which
+    /// languages have it, or opening it in the installed package of that language.
+    private func language(_ step:CompanionStep,local:Bool,token:UUID) async throws {
+        guard let browser=crawler?.intelligence.browser,browser.record != nil,let source=browser.provider as? any LibraryArticleSource else {
+            say("Open a package in Library first.");return
+        }
+        guard let map=browser.linkMap else {say(LinkMapLibrary.missingMap(project:browser.linkMapProject,for:"Other languages"));return}
+        guard map.hasLanguages else {say(map.languagesMissing);return}
+        let found:Int32?,name:String
+        if let from=step.from,!ConnectionEngine.isOpenArticle(from) {
+            found=try await map.node(named:from,source:source);name=from
+        } else {
+            guard let id=browser.currentArticleID else {say("Open an article first, or name one: “what is Paris called in French?”");return}
+            found=map.node(id.path) ?? map.node(browser.title);name=browser.title
+        }
+        guard let node=found else {say("“\(name)” isn't in \(map.sourceName). It may be newer than the dump.");return}
+        let links=map.languageLinks(of:node),title=map.readableTitle(node)
+        var packages:[String:PackageRecord]=[:]
+        for record in browser.installedPackages() where record.id != browser.record?.id {
+            if let project=LinkMapLibrary.project(for:record.package),packages[project] == nil {packages[project]=record}
+        }
+        try checkpoint(token)
+        guard let wanted=step.language else {
+            let line=say(map.languagesAnswer(node,links:links,installed:Set(packages.keys)))
+            if local {amend(line,trail:"understood instantly")}
+            return
+        }
+        guard let code=LinkMapLibrary.languageCode(named:wanted,among:links.map(\.language)),let link=links.first(where:{$0.language == code}) else {
+            if let known=LinkMapLibrary.languageCode(named:wanted) {say("“\(title)” has no \(LinkMapLibrary.languageName(known)) article in \(map.sourceName).")}
+            else {say("I don't know a language called “\(wanted)”.")}
+            return
+        }
+        let record=packages[link.project]
+        if step.measure == "open" {
+            guard let record else {
+                say("In \(link.name) Wikipedia, “\(title)” is “\(link.title)”, but there's no \(link.name) Wikipedia package in your library. Download one under Packages to read it.")
+                return
+            }
+            let line=say("Opening “\(link.title)” in \(record.package.name)…")
+            if local {amend(line,trail:"understood instantly")}
+            // Opening another package ends this request, so it happens after the reply.
+            browser.openArticle(record,link.title)
+            return
+        }
+        let line=say("In \(link.name) Wikipedia, “\(title)” is “\(link.title)”."+(record == nil ? "" : " Say “open it in \(link.name)” to read it there."))
         if local {amend(line,trail:"understood instantly")}
     }
 

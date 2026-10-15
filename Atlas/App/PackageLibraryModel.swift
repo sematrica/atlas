@@ -53,6 +53,11 @@ final class PackageLibraryModel {
         self.storage=storage; downloads=DownloadManager(storage:storage);intelligence=IntelligenceModel(storage:storage);research=ResearchModel(storage:storage)
         browser.crawler.intelligence.provider=intelligence.provider
         browser.crawler.intelligence.model=intelligence.chatModel
+        browser.installedPackages={ [weak self] in self?.readable ?? [] }
+        browser.openArticle={ [weak self] record,title in
+            guard let self else { return }
+            Task { await self.open(record,article:title) }
+        }
         let crawler=browser.crawler
         intelligence.onChatModelChange={[weak crawler] name in crawler?.intelligence.model=name}
         intelligence.onFitChange={[weak crawler] badge in crawler?.intelligence.fit=badge}
@@ -196,7 +201,7 @@ final class PackageLibraryModel {
                     }
                     guard let page=try file("page"),let redirect=try file("redirect"),let pagelinks=try file("pagelinks") else { throw LinkMapError.missingTables(set.missing) }
                     let sources=LinkMapSources(project:set.project,date:set.date,page:page,redirect:redirect,pagelinks:pagelinks,
-                                               linktarget:try file("linktarget"),categorylinks:try file("categorylinks"))
+                                               linktarget:try file("linktarget"),categorylinks:try file("categorylinks"),langlinks:try file("langlinks"))
                     let indexes=try access.file("indexes")
                     if let free=try access.validate().availableBytes, free < LinkMapBuilder.estimatedSpace(sources) { throw LinkMapError.insufficientSpace }
                     let directory=indexes.appendingPathComponent(LinkMapLibrary.directoryName(project:set.project,date:set.date))
@@ -228,6 +233,19 @@ final class PackageLibraryModel {
         } catch { message=AtlasLog.message(error) }
         await refreshLinkMaps()
         await browser.loadLinkMap()
+    }
+
+    /// Opens a package, then an article in it by title: the same article in another language's Wikipedia.
+    func open(_ record: PackageRecord, article title: String) async {
+        await open(record)
+        guard browser.record?.id == record.id, let source=browser.provider as? any LibraryArticleSource else { return }
+        let path=title.replacingOccurrences(of:" ",with:"_")
+        do {
+            let found=try await source.resolve(paths:[path,"A/"+path])
+            if let article=found[path] ?? found["A/"+path] { browser.navigate(article.articleID.path); return }
+            if let article=try await LibraryEngine.resolveTitle(title,source:source) { browser.navigate(article.articleID.path); return }
+            browser.message="“\(title)” isn't in \(record.package.name); it may be newer than the package."
+        } catch { browser.message=AtlasLog.message(error) }
     }
 
     func updateAvailable(_ record: PackageRecord) -> Bool {

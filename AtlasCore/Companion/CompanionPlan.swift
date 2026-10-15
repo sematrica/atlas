@@ -4,7 +4,7 @@ import Foundation
 /// action needs; everything is validated and executed by Atlas itself.
 public struct CompanionStep:Codable,Sendable,Equatable {
     /// count, list, highlight, goto, clear, show, go, follow, open, back,
-    /// hunt, explore, wander, pause, resume, stop, speed, rule, read, library, connect, category
+    /// hunt, explore, wander, pause, resume, stop, speed, rule, read, library, connect, category, language
     public var action:String
     /// What to look for (count, list, highlight, goto).
     public var query:PageQuery?
@@ -39,8 +39,13 @@ public struct CompanionStep:Codable,Sendable,Equatable {
     /// titles (the articles in `titles`), search (the best results for `topic`).
     public var scope:String?
     /// library: articles (how many contain a match), total (all matches added up), list (which articles).
-    /// category: articles (how many are in it) or list.
+    /// category: articles (how many are in it), list, subcategories or parents (the categories it's in).
+    /// language: list (which languages), name (what it's called there) or open (read it there).
     public var measure:String?
+    /// category: count or list the articles in its subcategories too.
+    public var subcategories:Bool?
+    /// language: the language ("French", "fr").
+    public var language:String?
     /// library: article titles for the titles scope.
     public var titles:[String]?
     /// library: at most this many articles from the scope.
@@ -53,7 +58,7 @@ public struct CompanionStep:Codable,Sendable,Equatable {
 
     enum CodingKeys:String,CodingKey {
         case action,query,footing,color,instant,target,result,place,title,from,phrase,topic,speed,rule,question
-        case scope,measure,titles,articles,path
+        case scope,measure,titles,articles,path,subcategories,language
     }
     public init(from decoder:Decoder) throws {
         let c=try decoder.container(keyedBy:CodingKeys.self)
@@ -77,10 +82,19 @@ public struct CompanionStep:Codable,Sendable,Equatable {
         titles=c.lenientStrings(.titles)
         articles=c.lenientInt(.articles)
         path=c.lenientString(.path)
+        subcategories=c.lenientBool(.subcategories)
+        language=c.lenientString(.language)
     }
 
-    public static let actions=["count","list","highlight","goto","clear","show","go","follow","open","back","hunt","explore","wander","pause","resume","stop","speed","rule","read","library","connect","category"]
+    public static let actions=["count","list","highlight","goto","clear","show","go","follow","open","back","hunt","explore","wander","pause","resume","stop","speed","rule","read","library","connect","category","language"]
     static let queryActions:Set<String>=["count","list","highlight","goto"]
+    public static let categoryMeasures=["articles","list","subcategories","parents"]
+    public static let languageMeasures=["list","name","open"]
+    /// Every measure, for the schema: library's, then category's and language's own.
+    static var allMeasures:[String] {
+        var seen=Set<String>()
+        return (LibraryRequest.measures+categoryMeasures+languageMeasures).filter {seen.insert($0).inserted}
+    }
 
     /// Maps synonyms a model might use onto the executable action names.
     public func normalized()->CompanionStep? {
@@ -132,6 +146,10 @@ public struct CompanionStep:Codable,Sendable,Equatable {
         case "category","categories","incategory","categorymembers","membersof","categoriesof","whatcategories","articlecategories","listcategories","categorycount":
             step.action="category"
             if let title=step.title {step.title=Self.categoryName(title)}
+            if step.measure == nil,["subcategories","subcategoriesof","childcategories"].contains(raw) {step.measure="subcategories"}
+        case "language","languages","otherlanguages","otherlanguage","inlanguage","langlinks","interlanguage","languageversion","inotherlanguages","openinlanguage":
+            step.action="language"
+            if step.language == nil,let place=step.place {step.language=place}
         case "answer","reply","say","chat","respond","talk","none","noop","nothing","": return nil
         default: step.action=raw
         }
@@ -168,6 +186,10 @@ public struct CompanionStep:Codable,Sendable,Equatable {
     }
     static func normalizeMeasure(_ raw:String)->String {
         switch PageQuery.fold(raw).replacingOccurrences(of:" ",with:"") {
+        case "subcategories","subcategory","subcats","children","childcategories": return "subcategories"
+        case "parents","parent","parentcategories","supercategories","broader","containing": return "parents"
+        case "open","switch","openit","readit": return "open"
+        case "name","title","called","translation","translate": return "name"
         case "articles","count","howmanyarticles","articlecount","number","howmany","mentions": return "articles"
         case "total","sum","occurrences","times","all","matches","howmanytimes","totalcount": return "total"
         case "list","which","names","titles","whicharticles","show","rank","ranking","most": return "list"
@@ -212,7 +234,10 @@ public struct CompanionStep:Codable,Sendable,Equatable {
         case "follow": if place == nil {issues.append("follow needs the link text in place")}
         case "open": if title == nil && path == nil {issues.append("open needs an article title")}
         case "connect": if title == nil && result != "more" {issues.append("connect needs the article to reach in title")}
-        case "category": if let measure,!["articles","list"].contains(measure) {issues.append("category measure must be articles or list")}
+        case "category": if let measure,!Self.categoryMeasures.contains(measure) {issues.append("category measure must be one of \(Self.categoryMeasures.joined(separator:", "))")}
+        case "language":
+            if let measure,!Self.languageMeasures.contains(measure) {issues.append("language measure must be one of \(Self.languageMeasures.joined(separator:", "))")}
+            if measure == "open" || measure == "name",language == nil {issues.append("language \(measure ?? "") needs the language")}
         case "hunt": if phrase == nil {issues.append("hunt needs a phrase")}
         case "explore": if topic == nil {issues.append("explore needs a topic")}
         case "speed": if !["faster","slower","normal"].contains(speed ?? "") {issues.append("speed must be faster, slower or normal")}
@@ -221,7 +246,7 @@ public struct CompanionStep:Codable,Sendable,Equatable {
             if rule == "avoid" && place == nil {issues.append("rule avoid needs a place")}
         default: break
         }
-        for value in [color,target,place,title,from,phrase,topic,question].compactMap({$0})+(titles ?? []) where value.count>500 {
+        for value in [color,target,place,title,from,phrase,topic,question,language].compactMap({$0})+(titles ?? []) where value.count>500 {
             issues.append("a field is longer than 500 characters")
         }
         return issues
@@ -350,8 +375,9 @@ extension CompanionPlan {
                 ("speed",enumeration(["faster","slower","normal"])),
                 ("rule",enumeration(["avoid","stay","allowLinks","clearRules"])),
                 ("question",text),
-                ("scope",enumeration(LibraryRequest.scopes)),("measure",enumeration(LibraryRequest.measures)),
-                ("titles",texts),("articles",integer)
+                ("scope",enumeration(LibraryRequest.scopes)),
+                ("measure",enumeration(CompanionStep.allMeasures)),
+                ("titles",texts),("articles",integer),("subcategories",boolean),("language",text)
             ])),
             ("required",.array([.string("action")])),
             ("additionalProperties",.bool(false))

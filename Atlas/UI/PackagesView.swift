@@ -132,7 +132,7 @@ struct PackagesView: View {
 
     // MARK: Link maps
 
-    /// In the Wikimedia archives: download the five tables a link map is built from.
+    /// In the Wikimedia archives: download the tables a link map is built from.
     private var linkMapDownload: some View {
         let files=model.linkMapFiles
         let missing=files.filter { package in !model.records.contains(where:{$0.id == package.id}) }
@@ -182,9 +182,7 @@ struct PackagesView: View {
                         Text("Still needed: \(set.missing.map {"\(set.project)-\(set.date)-\($0).sql.gz"}.joined(separator:", ")). Download them from Available → Wikimedia archives.")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
                     } else {
-                        let optional=["linktarget","categorylinks"].filter { set.records[$0] == nil }
-                        Text(optional.isEmpty ? "Ready to build, with categories." : "Ready to build. Without \(optional.joined(separator:" and ")), "+(optional.contains("categorylinks") ? "there are no categories" : "only older dumps can be read")+".")
-                            .font(.caption).foregroundStyle(.secondary)
+                        Text(readiness(set)).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
                     }
                 }
             }
@@ -192,8 +190,11 @@ struct PackagesView: View {
                 HStack(alignment:.top) {
                     VStack(alignment:.leading,spacing:3) {
                         Text("\(map.manifest.project) · \(map.manifest.readableDate)").font(.callout.weight(.medium))
-                        Text("\(map.manifest.articles.formatted()) articles · \(map.manifest.links.formatted()) links"+(map.manifest.categories > 0 ? " · \(map.manifest.categories.formatted()) categories" : "")+" · "+ByteCountFormatter.string(fromByteCount:map.bytes,countStyle:.file))
-                            .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                        Text(contents(map)).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                        if map.manifest.version < 2 {
+                            Text("Built before subcategories and other languages: Rebuild it from the same tables, plus langlinks, to add them.")
+                                .font(.caption2).foregroundStyle(.orange).fixedSize(horizontal:false,vertical:true)
+                        }
                         Text(model.browser.linkMap?.directory == map.directory ? "In use by the open package" : "Used by \(map.manifest.project) packages when you open them")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
@@ -206,6 +207,21 @@ struct PackagesView: View {
             }
         }
         .padding(12).background(Color.secondary.opacity(0.08),in:RoundedRectangle(cornerRadius:8))
+    }
+    /// What a build from these tables will have, and what it will lack.
+    private func readiness(_ set: LinkMapLibrary.DumpSet) -> String {
+        let effects=[("linktarget","dumps from 2024 on can't be read"),("categorylinks","no categories"),("langlinks","no other languages")]
+        let lacking=effects.filter { set.records[$0.0] == nil }
+        if lacking.isEmpty { return "Ready to build, with categories, subcategories and other languages." }
+        return "Ready to build. Without "+lacking.map(\.0).joined(separator:" and ")+": "+lacking.map(\.1).joined(separator:"; ")+"."
+    }
+    /// "6,912,004 articles · 612 million links · 2.1 million categories · 342 languages · 9.8 GB".
+    private func contents(_ map: BuiltLinkMap) -> String {
+        var parts=["\(map.manifest.articles.formatted()) articles","\(map.manifest.links.formatted()) links"]
+        if map.manifest.categories > 0 { parts.append("\(map.manifest.categories.formatted()) categories") }
+        if let languages=map.manifest.languages, languages > 0 { parts.append("\(languages.formatted()) languages") }
+        parts.append(ByteCountFormatter.string(fromByteCount:map.bytes,countStyle:.file))
+        return parts.joined(separator:" · ")
     }
     private func stateLabel(_ record: PackageRecord) -> String {
         if record.state == .installed && record.package.format == .archive { return "Stored" }

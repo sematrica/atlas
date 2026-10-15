@@ -117,8 +117,10 @@ struct TestWiki {
     ]
     /// (from page, category, type)
     static let categories:[(Int,String,String)]=[(1,"Jazz_musicians","page"),(6,"Jazz_musicians","page"),(1,"Articles_with_short_description","page"),(8,"Musicians","subcat")]
+    /// (from page, language, title there). The redirect's and the talk page's are left out.
+    static let languages:[(Int,String,String)]=[(1,"fr","Ray Charles"),(1,"de","Ray Charles"),(4,"fr","Paris"),(4,"ja","パリ"),(5,"fr","Paris"),(10,"fr","Discussion:Ray Charles"),(6,"zh-yue","爵士樂")]
 
-    static func sources(_ fixture:DumpFixture,modern:Bool,categories:Bool=true,linktarget:Bool=true) throws -> LinkMapSources {
+    static func sources(_ fixture:DumpFixture,modern:Bool,categories:Bool=true,linktarget:Bool=true,languages:Bool=true) throws -> LinkMapSources {
         let page=try fixture.table("page",columns:["page_id","page_namespace","page_title","page_is_redirect","page_is_new","page_random","page_len"],
                                    rows:pages.map {$0+[0,0.25,100]},file:"testwiki-20261001-page.sql.gz")
         let redirect=try fixture.table("redirect",columns:["rd_from","rd_namespace","rd_title","rd_interwiki","rd_fragment"],rows:redirects,file:"testwiki-20261001-redirect.sql.gz")
@@ -149,7 +151,8 @@ struct TestWiki {
             }
             linktargetURL=try fixture.table("linktarget",columns:["lt_id","lt_namespace","lt_title"],rows:rows,file:"testwiki-20261001-linktarget.sql.gz")
         }
-        return LinkMapSources(project:"testwiki",date:"20261001",page:page,redirect:redirect,pagelinks:pagelinks,linktarget:linktargetURL,categorylinks:categorylinks)
+        let langlinks=languages ? try fixture.table("langlinks",columns:["ll_from","ll_lang","ll_title"],rows:Self.languages.map {[$0.0,$0.1,$0.2]},file:"testwiki-20261001-langlinks.sql.gz") : nil
+        return LinkMapSources(project:"testwiki",date:"20261001",page:page,redirect:redirect,pagelinks:pagelinks,linktarget:linktargetURL,categorylinks:categorylinks,langlinks:langlinks)
     }
 }
 
@@ -193,7 +196,21 @@ final class LinkMapTests:XCTestCase {
         XCTAssertNotNil(jazzMusicians)
         XCTAssertEqual(Set(map.members(jazzMusicians ?? -1).map(map.title)),["Ray_Charles","Jazz"])
         XCTAssertEqual(Set(map.categories(of:node("Ray Charles")).map(map.categoryName)),["Jazz_musicians","Articles_with_short_description"])
-        XCTAssertNil(map.category("Musicians"),"subcategory entries aren't article memberships")
+        // Subcategories: Jazz musicians is filed in Musicians, which has no articles of its own.
+        let musicians=map.category("Musicians")
+        XCTAssertNotNil(musicians,"a category with only subcategories can be looked up too")
+        XCTAssertEqual(map.members(musicians ?? -1),[],"subcategory entries aren't article memberships")
+        XCTAssertEqual(map.subcategories(musicians ?? -1).map(map.categoryName),["Jazz_musicians"])
+        XCTAssertEqual(map.parentCategories(jazzMusicians ?? -1).map(map.categoryName),["Musicians"])
+        XCTAssertEqual(Set(map.members(of:map.categoryTree(musicians ?? -1)).map(map.title)),["Ray_Charles","Jazz"])
+        XCTAssertEqual(map.manifest.subcategoryLinks,1)
+        // Other languages.
+        XCTAssertEqual(map.languages(of:node("Ray Charles")).map(\.language),["fr","de"])
+        XCTAssertEqual(map.languages(of:node("Paris")).map(\.title),["Paris","パリ"])
+        XCTAssertEqual(map.languageLinks(of:node("Jazz")),[LanguageLink(language:"zh-yue",title:"爵士樂")])
+        XCTAssertEqual(map.languages(of:node("Atlantic Records")).count,0)
+        XCTAssertEqual(map.manifest.languageLinks,5)
+        XCTAssertEqual(map.manifest.languages,4)
         XCTAssertTrue(LinkMap.isMaintenance("Articles_with_short_description"))
         XCTAssertFalse(LinkMap.isMaintenance("Jazz_musicians"))
     }
@@ -271,21 +288,35 @@ final class LinkMapTests:XCTestCase {
 
 extension DumpFixture {
     /// A link map built from articles and the articles each links to (the older dump layout).
-    func linkMap(_ links:[String:[String]],redirects:[String:String]=[:],categories:[String:[String]]=[:],project:String="enwiki") throws -> LinkMap {
-        let titles=Array(Set(links.keys).union(links.values.joined()).union(redirects.values).subtracting(redirects.keys)).sorted()+redirects.keys.sorted()
+    /// - Parameters:
+    ///   - categories: category → the articles directly in it.
+    ///   - subcategories: category → the categories directly inside it.
+    ///   - languages: article → its (language, title) elsewhere.
+    func linkMap(_ links:[String:[String]],redirects:[String:String]=[:],categories:[String:[String]]=[:],subcategories:[String:[String]]=[:],
+                 languages:[String:[(String,String)]]=[:],project:String="enwiki") throws -> LinkMap {
+        let titles=Array(Set(links.keys).union(links.values.joined()).union(redirects.values).union(categories.values.joined()).subtracting(redirects.keys)).sorted()+redirects.keys.sorted()
         var ids:[String:Int]=[:]
         for (index,title) in titles.enumerated() {ids[title]=index+1}
+        // Category pages (namespace 14) for every category named.
+        let categoryTitles=Array(Set(categories.keys).union(subcategories.keys).union(subcategories.values.joined())).sorted()
+        var categoryIDs:[String:Int]=[:]
+        for (index,name) in categoryTitles.enumerated() {categoryIDs[name]=titles.count+index+1}
         let page=try table("page",columns:["page_id","page_namespace","page_title","page_is_redirect"],
-                           rows:titles.map {[ids[$0]!,0,$0,redirects[$0] == nil ? 0 : 1]},file:"\(project)-20261001-page.sql.gz")
+                           rows:titles.map {[ids[$0]!,0,$0,redirects[$0] == nil ? 0 : 1]}+categoryTitles.map {[categoryIDs[$0]!,14,$0,0]},
+                           file:"\(project)-20261001-page.sql.gz")
         let redirect=try table("redirect",columns:["rd_from","rd_namespace","rd_title","rd_interwiki"],
                                rows:redirects.sorted {$0.key<$1.key}.map {[ids[$0.key]!,0,$0.value,""]},file:"\(project)-20261001-redirect.sql.gz")
         let pagelinks=try table("pagelinks",columns:["pl_from","pl_namespace","pl_title","pl_from_namespace"],
                                 rows:links.sorted {$0.key<$1.key}.flatMap {entry in entry.value.map {title -> [Any?] in [ids[entry.key]!,0,title,0]}},file:"\(project)-20261001-pagelinks.sql.gz")
-        let categorylinks=categories.isEmpty ? nil : try table("categorylinks",columns:["cl_from","cl_to","cl_type"],
-                                                               rows:categories.sorted {$0.key<$1.key}.flatMap {entry in entry.value.map {title -> [Any?] in [ids[title]!,entry.key,"page"]}},
-                                                               file:"\(project)-20261001-categorylinks.sql.gz")
+        let memberships:[[Any?]]=categories.sorted {$0.key<$1.key}.flatMap {entry in entry.value.map {title -> [Any?] in [ids[title]!,entry.key,"page"]}}
+        let nesting:[[Any?]]=subcategories.sorted {$0.key<$1.key}.flatMap {entry in entry.value.map {child -> [Any?] in [categoryIDs[child]!,entry.key,"subcat"]}}
+        let categorylinks=memberships.isEmpty && nesting.isEmpty ? nil : try table("categorylinks",columns:["cl_from","cl_to","cl_type"],rows:memberships+nesting,
+                                                                                    file:"\(project)-20261001-categorylinks.sql.gz")
+        let languageRows:[[Any?]]=languages.sorted {$0.key<$1.key}.flatMap {entry in entry.value.map {link -> [Any?] in [ids[entry.key]!,link.0,link.1]}}
+        let langlinks=languageRows.isEmpty ? nil : try table("langlinks",columns:["ll_from","ll_lang","ll_title"],rows:languageRows,file:"\(project)-20261001-langlinks.sql.gz")
         let directory=folder.appendingPathComponent(LinkMapLibrary.directoryName(project:project,date:"20261001"))
-        _ = try LinkMapBuilder.build(.init(project:project,date:"20261001",page:page,redirect:redirect,pagelinks:pagelinks,linktarget:nil,categorylinks:categorylinks),into:directory)
+        _ = try LinkMapBuilder.build(.init(project:project,date:"20261001",page:page,redirect:redirect,pagelinks:pagelinks,linktarget:nil,
+                                           categorylinks:categorylinks,langlinks:langlinks),into:directory)
         return try LinkMap(directory:directory)
     }
 }
@@ -352,9 +383,9 @@ final class LinkMapAnswerTests:XCTestCase {
             WikipediaPackage(id:"wikimedia:"+name,name:name,languageCode:"en",kind:.rawDump,summary:"",version:date,
                              downloadURL:URL(string:"https://dumps.wikimedia.org/enwiki/\(date)/\(name)")!,downloadBytes:100,format:.archive,source:"Wikimedia",family:name)
         }
-        let catalog=["abstract.xml.gz","categorylinks.sql.gz","page.sql.gz","pagelinks.sql.gz","linktarget.sql.gz","redirect.sql.gz","externallinks.sql.gz"]
+        let catalog=["abstract.xml.gz","categorylinks.sql.gz","page.sql.gz","pagelinks.sql.gz","linktarget.sql.gz","redirect.sql.gz","externallinks.sql.gz","langlinks.sql.gz"]
             .flatMap {[archive("enwiki-20261001-"+$0,date:"20261001"),archive("enwiki-20260901-"+$0,date:"20260901")]}
-        XCTAssertEqual(LinkMapLibrary.downloads(in:catalog).map(\.name),["page","redirect","pagelinks","linktarget","categorylinks"].map {"enwiki-20261001-\($0).sql.gz"},
+        XCTAssertEqual(LinkMapLibrary.downloads(in:catalog).map(\.name),["page","redirect","pagelinks","linktarget","categorylinks","langlinks"].map {"enwiki-20261001-\($0).sql.gz"},
                        "the newest dump's link map tables, in build order")
         var records=catalog.map {PackageRecord(package:$0)}
         for index in records.indices where records[index].package.version == "20261001" {records[index].state = .installed}
@@ -391,5 +422,118 @@ final class LinkMapAnswerTests:XCTestCase {
         XCTAssertNil(LibraryRequest(scope:"linked",measure:"list",query:links).linksHereTarget)
         var section=links;section.section="Career"
         XCTAssertNil(LibraryRequest(scope:"library",measure:"list",query:section).linksHereTarget,"only links in a section need reading")
+    }
+}
+
+final class LinkMapSubcategoryAndLanguageTests:XCTestCase {
+    var fixture:DumpFixture!
+    override func setUpWithError() throws {fixture=try DumpFixture()}
+    override func tearDown() {fixture.remove()}
+
+    func map() throws -> LinkMap {
+        var chain:[String:[String]]=[:]
+        for level in 0..<7 {chain["Level_\(level)"]=["Level_\(level+1)"]}
+        return try fixture.linkMap(["Ray_Charles":["Jazz","Paris"],"Herbie_Hancock":["Jazz"],"Jazz":["Ray_Charles"]],
+                                   categories:["Music":["Jazz"],"Jazz_musicians":["Ray_Charles"],"Jazz_pianists":["Ray_Charles","Herbie_Hancock"],
+                                               "Pianists":["Herbie_Hancock"],"Loop_A":["Paris"],"Level_7":["Paris"],"Category_theory":["Paris"]],
+                                   subcategories:chain.merging(["Music":["Jazz_musicians"],"Jazz_musicians":["Jazz_pianists"],"Pianists":["Jazz_pianists"],
+                                                                "Loop_A":["Loop_B"],"Loop_B":["Loop_A"]]) {$1},
+                                   languages:["Paris":[("de","Paris"),("fr","Paris"),("ja","パリ")],"Jazz":[("simple","Jazz")]])
+    }
+
+    func testCategoryTrees() throws {
+        let map=try map()
+        func category(_ name:String)->Int32 {map.category(name) ?? -1}
+        XCTAssertTrue(map.hasSubcategories)
+        XCTAssertEqual(map.subcategories(category("Music")).map(map.categoryName),["Jazz_musicians"])
+        XCTAssertEqual(Set(map.parentCategories(category("Jazz pianists")).map(map.categoryName)),["Jazz_musicians","Pianists"])
+        let music=map.categoryTree(category("Music"))
+        XCTAssertEqual(music.categories.map(map.categoryName),["Music","Jazz_musicians","Jazz_pianists"])
+        XCTAssertEqual(music.depth,2)
+        XCTAssertFalse(music.cut)
+        XCTAssertEqual(Set(map.members(of:music).map(map.title)),["Jazz","Ray_Charles","Herbie_Hancock"],"Ray Charles is in two of them and counts once")
+
+        // A category inside its own subcategory is visited once.
+        let loop=map.categoryTree(category("Loop A"))
+        XCTAssertEqual(Set(loop.categories.map(map.categoryName)),["Loop_A","Loop_B"])
+        XCTAssertFalse(loop.cut)
+
+        // Deep or wide trees stop, and say so.
+        XCTAssertNotNil(map.category("Level 0"),"a category holding only subcategories can be looked up")
+        XCTAssertEqual(map.category("Category theory").map(map.categoryName),"Category_theory","a name that starts with “Category” is kept")
+        XCTAssertEqual(map.category("Category:Category theory").map(map.categoryName),"Category_theory")
+        XCTAssertEqual(map.category("category Music").map(map.categoryName),"Music")
+        let deep=map.categoryTree(category("Level 0"))
+        XCTAssertEqual(deep.depth,LinkMap.defaultTreeDepth)
+        XCTAssertTrue(deep.cut)
+        XCTAssertEqual(map.members(of:deep),[],"Level 7 is beyond the depth")
+        XCTAssertEqual(map.members(of:map.categoryTree(category("Level 0"),maxDepth:10)).map(map.title),["Paris"])
+        let small=map.categoryTree(category("Level 0"),limit:3)
+        XCTAssertEqual(small.categories.count,3)
+        XCTAssertTrue(small.cut)
+    }
+
+    func testCategoryAnswers() throws {
+        let map=try map()
+        func category(_ name:String)->Int32 {map.category(name) ?? -1}
+        let music=category("Music"),tree=map.categoryTree(music)
+        XCTAssertEqual(map.categoryTreeAnswer(music,tree:tree,members:map.members(of:tree),list:false),
+                       "3 articles are in Category:Music or the 2 categories inside it (2 levels down), each article counted once, according to Wikipedia's link map (2026-10-01).")
+        XCTAssertTrue(map.categoryTreeAnswer(category("Level 0"),tree:map.categoryTree(category("Level 0")),members:[],list:false).contains("The tree goes on further"))
+        XCTAssertTrue(map.categoryAnswer(music,list:false).hasSuffix("It also has 1 subcategory; ask “including subcategories” to count their articles too."))
+        XCTAssertEqual(map.subcategoriesAnswer(category("Jazz musicians")),"Category:Jazz musicians has 1 subcategory, according to Wikipedia's link map (2026-10-01): Jazz pianists.")
+        XCTAssertEqual(map.subcategoriesAnswer(category("Pianists")),"Category:Pianists has 1 subcategory, according to Wikipedia's link map (2026-10-01): Jazz pianists.")
+        XCTAssertEqual(map.parentsAnswer(category("Jazz pianists")),"Category:Jazz pianists is inside 2 categories: Jazz musicians, Pianists. From Wikipedia's link map (2026-10-01).")
+        XCTAssertEqual(map.parentsAnswer(music),"Category:Music isn't inside any other category in Wikipedia's link map (2026-10-01).")
+    }
+
+    func testOtherLanguages() throws {
+        let map=try map()
+        let paris=try XCTUnwrap(map.node("Paris"))
+        XCTAssertTrue(map.hasLanguages)
+        let links=map.languageLinks(of:paris)
+        XCTAssertEqual(Set(links.map(\.language)),["de","fr","ja"])
+        XCTAssertEqual(links.first {$0.language == "fr"}?.project,"frwiki")
+        let answer=map.languagesAnswer(paris,links:links,installed:["frwiki"])
+        XCTAssertTrue(answer.hasPrefix("“Paris” has an article in 3 other languages, according to Wikipedia's link map (2026-10-01)."),answer)
+        XCTAssertTrue(answer.contains("You can read it in \(LinkMapLibrary.languageName("fr")) (“Paris”)"),answer)
+        XCTAssertTrue(map.languagesAnswer(paris,links:links,installed:[]).contains("None of them has a Wikipedia package"))
+        XCTAssertEqual(map.languageLinks(of:map.node("Jazz")!).first?.name,"Simple English")
+        XCTAssertEqual(map.languagesAnswer(map.node("Herbie Hancock")!,links:[],installed:[]),"“Herbie Hancock” has no article in another language in Wikipedia's link map (2026-10-01).")
+    }
+
+    func testLanguageNamesAndProjects() {
+        XCTAssertEqual(LinkMapLibrary.languageCode(named:"French"),"fr")
+        XCTAssertEqual(LinkMapLibrary.languageCode(named:"french Wikipedia"),"fr")
+        XCTAssertEqual(LinkMapLibrary.languageCode(named:"Français"),"fr","a language's own name")
+        XCTAssertEqual(LinkMapLibrary.languageCode(named:"Deutsch"),"de")
+        XCTAssertEqual(LinkMapLibrary.languageCode(named:"ja"),"ja")
+        XCTAssertEqual(LinkMapLibrary.languageCode(named:"Simple English"),"simple")
+        XCTAssertNil(LinkMapLibrary.languageCode(named:"a new window"))
+        XCTAssertEqual(LinkMapLibrary.languageCode(named:"German",among:["fr","de"]),"de")
+        XCTAssertNil(LinkMapLibrary.languageCode(named:"Japanese",among:["fr","de"]),"only the article's languages count")
+        XCTAssertEqual(LinkMapLibrary.languageCode(named:"zh-yue",among:["zh-yue"]),"zh-yue")
+        XCTAssertEqual(LinkMapLibrary.project(forLanguage:"zh-yue"),"zh_yuewiki")
+        XCTAssertEqual(LinkMapLibrary.project(forLanguage:"be-tarask"),"be_x_oldwiki")
+        XCTAssertEqual(LinkMapLibrary.project(forLanguage:"simple"),"simplewiki")
+        XCTAssertEqual(LinkMapLibrary.project(forPackageName:"wikipedia_fr_all_maxi"),LinkMapLibrary.project(forLanguage:"fr"),"packages and languages meet on the same name")
+    }
+
+    /// Maps built before subcategories and languages still open, without them.
+    func testVersionOneMapsStillOpen() throws {
+        let built=try fixture.linkMap(["Ray_Charles":["Paris"]],categories:["Musicians":["Ray_Charles"]])
+        let file=built.directory.appendingPathComponent(LinkMap.manifestName)
+        var json=try XCTUnwrap(JSONSerialization.jsonObject(with:Data(contentsOf:file)) as? [String:Any])
+        json["version"]=1;json["subcategoryLinks"]=nil;json["languageLinks"]=nil;json["languages"]=nil
+        try JSONSerialization.data(withJSONObject:json).write(to:file)
+        let old=try LinkMap(directory:built.directory)
+        XCTAssertEqual(old.manifest.version,1)
+        XCTAssertTrue(old.hasCategories)
+        XCTAssertFalse(old.hasSubcategories)
+        XCTAssertFalse(old.hasLanguages)
+        XCTAssertEqual(old.languages(of:0).count,0)
+        json["version"]=99
+        try JSONSerialization.data(withJSONObject:json).write(to:file)
+        XCTAssertThrowsError(try LinkMap(directory:built.directory)) {XCTAssertEqual($0 as? LinkMapError,.outdated)}
     }
 }

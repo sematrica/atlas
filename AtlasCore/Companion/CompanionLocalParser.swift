@@ -16,6 +16,8 @@ public enum CompanionLocalParser {
         if let plan=control(cursor.rest) {return plan}
         if let plan=goPlace(&cursor) {return plan}
         cursor.i=0
+        if let plan=languageRequest(&cursor,original:request) {return plan}
+        cursor.i=0
         if let plan=connectRequest(&cursor,original:request) {return plan}
         cursor.i=0
         if let plan=categoryRequest(&cursor,original:request) {return plan}
@@ -383,7 +385,29 @@ public enum CompanionLocalParser {
     /// "how many articles are in the category Jazz pianists", "which articles are in Category:Jazz pianists",
     /// "list the pages in the jazz pianists category", "what categories is this article in",
     /// "what categories does Ray Charles belong to".
-    static func categoryRequest(_ cursor:inout Cursor,original request:String)->CompanionPlan? {
+    static let subcategoryTails:[[String]]=[["including","subcategories"],["including","its","subcategories"],["including","all","subcategories"],["including","all","its","subcategories"],
+                                            ["including","their","subcategories"],["and","its","subcategories"],["and","all","its","subcategories"],["and","subcategories"],
+                                            ["with","subcategories"],["with","its","subcategories"],["counting","subcategories"],["plus","subcategories"],["plus","its","subcategories"],
+                                            ["or","its","subcategories"],["or","any","of","its","subcategories"],["or","their","subcategories"]]
+
+    static func categoryRequest(_ input:inout Cursor,original request:String)->CompanionPlan? {
+        // "sub-categories", "sub categories" and "subcats" all mean subcategories.
+        var tokens:[Token]=[]
+        for token in input.tokens {
+            if !token.quoted,let last=tokens.last,!last.quoted,last.text == "sub",["categories","category"].contains(token.text) {
+                tokens[tokens.count-1]=Token(text:"sub"+token.text,quoted:false);continue
+            }
+            if !token.quoted,["subcats","subcat"].contains(token.text) {tokens.append(Token(text:token.text == "subcat" ? "subcategory" : "subcategories",quoted:false));continue}
+            tokens.append(token)
+        }
+        // "… including subcategories": the articles in the whole tree.
+        var deep=false
+        for tail in subcategoryTails.sorted(by:{$0.count>$1.count}) where tokens.count>tail.count && tokens.suffix(tail.count).map(\.text) == tail && !tokens.suffix(tail.count).contains(where:\.quoted) {
+            tokens.removeLast(tail.count);deep=true
+            while let last=tokens.last,!last.quoted,[",",";","-"].contains(last.text) {tokens.removeLast()}
+            break
+        }
+        var cursor=Cursor(tokens:tokens)
         let body={(cursor:Cursor) in Array(cursor.tokens[cursor.i...])}
         /// "(the) category X", "(the) X category", "Category:X".
         func categoryName(_ words:[Token])->String? {
@@ -398,12 +422,55 @@ public enum CompanionLocalParser {
             guard !words.isEmpty,words.count<=10,!words.contains(where:{!$0.quoted && $0.text == ":"}) else {return nil}
             return original(words.map(\.text).joined(separator:" "),in:request)
         }
+        /// A category named without the word "category" too: "Jazz musicians".
+        func looseName(_ words:[Token])->String? {
+            if let name=categoryName(words) {return name}
+            var words=words
+            if let first=words.first,!first.quoted,first.text == "the" {words.removeFirst()}
+            guard !words.isEmpty,words.count<=10,!words.contains(where:{!$0.quoted && [":","in","of","and","or"].contains($0.text)}) else {return nil}
+            return original(words.map(\.text).joined(separator:" "),in:request)
+        }
         func ends(_ words:inout [Token],with tails:[[String]])->Bool {
             for tail in tails where words.count>tail.count && words.suffix(tail.count).map(\.text) == tail && !words.suffix(tail.count).contains(where:\.quoted) {
                 words.removeLast(tail.count);return true
             }
             return false
         }
+        func plan(_ title:String?,_ measure:String?,from:String?=nil)->CompanionPlan {
+            var step=CompanionStep(action:"category");step.title=title;step.measure=measure;step.from=from
+            if deep,measure == "articles" || measure == "list" {step.subcategories=true}
+            return .init(steps:[step],local:true)
+        }
+        let listLeads:[[String]]=[["what","are","the"],["what","are"],["which","are","the"],["which","are"],["list","the"],["list","all","the"],["list","all"],["list"],
+                                  ["show","me","the"],["show","me","all","the"],["show","me"],["give","me","the"],["name","the"],["what"],["which"],["the"]]
+
+        // A category's subcategories: "what are the subcategories of Jazz musicians", "how many subcategories does X have".
+        var counting=false
+        if cursor.accept(sequence:["how","many"]) {counting=true}
+        else {for lead in listLeads.sorted(by:{$0.count>$1.count}) where cursor.accept(sequence:lead) {break}}
+        if cursor.accept(["subcategories","subcategory"]) != nil,!deep {
+            var words=body(cursor)
+            guard let first=words.first,!first.quoted else {return nil}
+            if ["of","in","under","inside","within","for"].contains(first.text) {words.removeFirst()}
+            else if ["are","is"].contains(first.text),words.count>1,["in","under","inside"].contains(words[1].text) {words.removeFirst(2)}
+            else if ["does","do","has"].contains(first.text) {
+                words.removeFirst()
+                guard first.text == "has" || ends(&words,with:[["have"],["contain"],["include"],["hold"]]) else {return nil}
+            } else {return nil}
+            guard let name=looseName(words) else {return nil}
+            return plan(name,"subcategories")
+        }
+        // The categories a category is in: "what are the parent categories of Jazz pianists".
+        if !counting,!deep,cursor.accept(sequence:["parent","categories"]) || cursor.accept(sequence:["parent","category"]) || cursor.accept("supercategories") {
+            guard cursor.accept(["of","for"]) != nil,let name=looseName(body(cursor)) else {return nil}
+            return plan(name,"parents")
+        }
+        // "which categories contain the category Jazz pianists"
+        cursor.i=0
+        if !deep,cursor.accept(["which","what"]) != nil,cursor.accept("categories"),cursor.accept(["contain","contains","include","hold"]) != nil,let name=categoryName(body(cursor)) {
+            return plan(name,"parents")
+        }
+        cursor.i=0
 
         // The articles in a category.
         var measure:String?
@@ -424,17 +491,17 @@ public enum CompanionLocalParser {
         if let measure {
             cursor.skip(["are","is","there","exactly"])
             var name:String?
+            // With "including subcategories", the request is about a category even without the word.
+            let named=deep ? looseName : categoryName
             if cursor.accept("in") || cursor.accept(sequence:["belong","to"]) || cursor.accept(sequence:["belonging","to"]) || cursor.accept("under") {
-                name=categoryName(body(cursor))
+                name=named(body(cursor))
             } else if cursor.accept(["does","do"]) != nil {
                 var words=body(cursor)
-                if ends(&words,with:[["have"],["contain"],["include"],["hold"]]) {name=categoryName(words)}
+                if ends(&words,with:[["have"],["contain"],["include"],["hold"]]) {name=named(words)}
             }
-            if let name {
-                var step=CompanionStep(action:"category");step.title=name;step.measure=measure
-                return .init(steps:[step],local:true)
-            }
+            if let name {return plan(name,measure)}
         }
+        guard !deep else {return nil}
 
         // The categories an article is in.
         cursor.i=0
@@ -453,10 +520,124 @@ public enum CompanionLocalParser {
             guard ends(&words,with:[["belong","to"],["belong","in"],["fall","under"],["fall","into"],["fall","in"],["have"],["appear","in"]]) else {return nil}
         } else {return nil}
         guard words.count<=10 else {return nil}
+        // "what categories is the category Jazz pianists in": a category's own categories.
+        if let name=categoryName(words) {return plan(name,"parents")}
         let article=words.map(\.text).joined(separator:" ")
-        var step=CompanionStep(action:"category")
-        if !article.isEmpty,!openArticleWords.contains(article) {step.from=original(article,in:request)}
-        return .init(steps:[step],local:true)
+        return plan(nil,nil,from:article.isEmpty || openArticleWords.contains(article) ? nil : original(article,in:request))
+    }
+
+    // MARK: Other languages
+
+    /// "what is this article called in French", "which languages is this article in",
+    /// "open this in French", "switch to German", "open the Japanese version of Paris".
+    /// Only names of real languages count, so "open this in a new window" goes to the model.
+    static func languageRequest(_ cursor:inout Cursor,original request:String)->CompanionPlan? {
+        let tokens=Array(cursor.tokens[cursor.i...])
+        guard !tokens.isEmpty,tokens.count<=16 else {return nil}
+        /// A language named by up to three words: "French", "Simple English", "fr".
+        func language(_ words:ArraySlice<Token>)->String? {
+            guard (1...3).contains(words.count),!words.contains(where:\.quoted) else {return nil}
+            let text=words.map(\.text).joined(separator:" ")
+            guard LinkMapLibrary.languageCode(named:text) != nil else {return nil}
+            return original(text,in:request)
+        }
+        /// The article asked about: nil for the open one.
+        func article(_ words:ArraySlice<Token>)->(ok:Bool,name:String?) {
+            var words=words
+            let text=words.map(\.text).joined(separator:" ")
+            if text.isEmpty || openArticleWords.contains(text) {return (true,nil)}
+            if let first=words.first,!first.quoted,["the","a","an"].contains(first.text),words.count>1 {words.removeFirst()}
+            guard words.count<=8,!words.contains(where:{!$0.quoted && ["in","to","from","and"].contains($0.text)}) else {return (false,nil)}
+            return (true,original(words.map(\.text).joined(separator:" "),in:request))
+        }
+        func plan(_ measure:String,_ language:String?,_ from:String?)->CompanionPlan {
+            var step=CompanionStep(action:"language");step.measure=measure;step.language=language;step.from=from
+            return .init(steps:[step],local:true)
+        }
+        let texts=tokens.map {$0.quoted ? "\u{0}" : $0.text}
+        func at(_ index:Int)->String? {index>=0 && index<texts.count ? texts[index] : nil}
+
+        // what is X called in L
+        if let called=texts.lastIndex(of:"called"),at(called+1) == "in",let lang=language(tokens[(called+2)...]) {
+            var start=0
+            if texts.starts(with:["what","is"]) {start=2} else if texts.starts(with:["whats"]) || texts.starts(with:["what","s"]) {start=texts[0] == "whats" ? 1 : 2} else {return nil}
+            let subject=article(tokens[start..<called])
+            if subject.ok {return plan("name",lang,subject.name)}
+        }
+        // what is the L title/name of X
+        if texts.starts(with:["what","is","the"]) || texts.starts(with:["whats","the"]) {
+            let start=texts[0] == "whats" ? 2 : 3
+            if let noun=texts[start...].firstIndex(where:{["title","name"].contains($0)}),noun>start,let lang=language(tokens[start..<noun]) {
+                if noun+1 == texts.count {return plan("name",lang,nil)}
+                if ["of","for"].contains(texts[noun+1]) {
+                    let subject=article(tokens[(noun+2)...])
+                    if subject.ok {return plan("name",lang,subject.name)}
+                }
+            }
+        }
+        // which (other) languages is X (available) in, in which languages is X, what other languages have X
+        if ["which","what"].contains(texts[0]) || (texts[0] == "in" && ["which","what"].contains(at(1) ?? "")) {
+            var i=texts[0] == "in" ? 2 : 1
+            if at(i) == "other" {i += 1}
+            if at(i) == "languages" || at(i) == "language" {
+                i += 1
+                if i == texts.count {return plan("list",nil,nil)}
+                if let verb=at(i),["is","are","was"].contains(verb) {
+                    var end=texts.count
+                    if texts[0] != "in" {guard texts.last == "in" else {return nil};end -= 1}
+                    var words=tokens[(i+1)..<end]
+                    while let last=words.last,!last.quoted,["available","written","published"].contains(last.text) {words.removeLast()}
+                    let subject=article(words)
+                    if subject.ok {return plan("list",nil,subject.name)}
+                } else if let verb=at(i),["have","has"].contains(verb) {
+                    let subject=article(tokens[(i+1)...])
+                    if subject.ok {return plan("list",nil,subject.name)}
+                }
+            }
+        }
+        // list the (other) languages (of X), show me the other languages, other languages
+        for lead in [["list","the","other","languages"],["list","the","languages"],["show","me","the","other","languages"],["show","the","other","languages"],["other","languages"]]
+            where texts.starts(with:lead) {
+            if texts.count == lead.count {return plan("list",nil,nil)}
+            if ["of","for"].contains(texts[lead.count]) {
+                let subject=article(tokens[(lead.count+1)...])
+                if subject.ok {return plan("list",nil,subject.name)}
+            }
+        }
+        // is X (available) in L
+        if texts[0] == "is",let inIndex=texts.lastIndex(of:"in"),inIndex>1,let lang=language(tokens[(inIndex+1)...]) {
+            var words=tokens[1..<inIndex]
+            if words.last?.text == "available" {words.removeLast()}
+            let subject=article(words)
+            if subject.ok {return plan("name",lang,subject.name)}
+        }
+        // switch to L, open/read/show X in L, open the L version (of X)
+        if texts.starts(with:["switch","to"]) || texts.starts(with:["change","to"]) {
+            var end=texts.count
+            if let last=texts.last,["version","wikipedia"].contains(last) {end -= 1}
+            if let lang=language(tokens[2..<end]) {return plan("open",lang,nil)}
+        }
+        let opener:Set<String>=["open","read","show","view","go"]
+        if opener.contains(texts[0]) {
+            var i=1
+            if texts[0] == "show",at(1) == "me" {i=2}
+            if texts[0] == "go",at(1) == "to" {i=2}
+            // open the L version (of X)
+            if at(i) == "the",let version=texts[(i+1)...].firstIndex(where:{["version","article","page","wikipedia","edition"].contains($0)}),version>i+1,
+               let lang=language(tokens[(i+1)..<version]) {
+                if version+1 == texts.count {return plan("open",lang,nil)}
+                if ["of","for"].contains(texts[version+1]) {
+                    let subject=article(tokens[(version+2)...])
+                    if subject.ok {return plan("open",lang,subject.name)}
+                }
+            }
+            // open X in L (show only the open article, so "show me the nouns in French" isn't taken)
+            if texts[0] != "go",let inIndex=texts.lastIndex(of:"in"),inIndex>=i,let lang=language(tokens[(inIndex+1)...]) {
+                let subject=article(tokens[i..<inIndex])
+                if subject.ok,texts[0] != "show" || subject.name == nil {return plan("open",lang,subject.name)}
+            }
+        }
+        return nil
     }
 
     /// The user's own spelling of a phrase that was lowercased for parsing ("atlantic records" → "Atlantic Records").

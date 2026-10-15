@@ -3,6 +3,8 @@ import WebKit
 import AtlasCore
 
 struct ArticleHeading: Identifiable { let id: String; let title: String; let level: Int }
+/// The open article in another language's Wikipedia, and the installed package of that language, if any.
+struct ArticleLanguage: Identifiable { let link: LanguageLink; let record: PackageRecord?; var id: String { link.id } }
 @MainActor @Observable
 final class BrowserModel {
     let crawler=CrawlerController()
@@ -32,6 +34,24 @@ final class BrowserModel {
     var linkMap: LinkMap?
     /// The open package's Wikimedia project ("enwiki"); nil when it isn't a Wikipedia.
     var linkMapProject: String?
+    /// The library's readable packages, and a way to open an article in one (both set by the library),
+    /// so an article can be read in another language's Wikipedia.
+    @ObservationIgnored var installedPackages: @MainActor () -> [PackageRecord] = { [] }
+    @ObservationIgnored var openArticle: @MainActor (PackageRecord, String) -> Void = { _, _ in }
+    /// The open article in other languages, from the link map, with the installed package for each language.
+    func articleLanguages() -> [ArticleLanguage] {
+        guard let map=linkMap, map.hasLanguages, let id=currentArticleID, let node=map.node(id.path) ?? map.node(title) else { return [] }
+        var packages: [String:PackageRecord] = [:]
+        for record in installedPackages() where record.id != self.record?.id {
+            if let project=LinkMapLibrary.project(for:record.package), packages[project] == nil { packages[project]=record }
+        }
+        // Naming and sorting a few hundred languages takes a few milliseconds: keep them for the open article.
+        let links: [LanguageLink]
+        if let cached=languageCache, cached.node == node, cached.map === map { links=cached.links }
+        else { links=map.languageLinks(of:node); languageCache=(node,map,links) }
+        return links.map { ArticleLanguage(link:$0, record:packages[$0.project]) }
+    }
+    @ObservationIgnored private var languageCache: (node: Int32, map: LinkMap, links: [LanguageLink])?
     /// Kept so library questions can open the Research text index for this package.
     @ObservationIgnored private var access: LibraryAccess?
     @ObservationIgnored private var textIndex: ResearchStore?

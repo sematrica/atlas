@@ -4,8 +4,8 @@ import Foundation
 /// goes with an open package.
 public enum LinkMapLibrary {
     /// The tables a link map is built from. linktarget is needed by dumps from 2024 on;
-    /// categorylinks is optional.
-    public static let tables=["page","redirect","pagelinks","linktarget","categorylinks"]
+    /// categorylinks (categories) and langlinks (other languages) are optional.
+    public static let tables=["page","redirect","pagelinks","linktarget","categorylinks","langlinks"]
     public static let requiredTables=["page","redirect","pagelinks"]
 
     /// "enwiki-20261001-pagelinks.sql.gz" → ("enwiki", "20261001", "pagelinks").
@@ -96,6 +96,155 @@ public enum LinkMapLibrary {
     static func order(_ table:String)->Int {tables.firstIndex(of:table) ?? tables.count}
 }
 
+// MARK: - Other languages
+
+/// An article's counterpart in another language's Wikipedia.
+public struct LanguageLink:Sendable,Equatable,Identifiable {
+    public var id:String {language}
+    /// Wikipedia's language code: "fr", "zh-yue", "simple".
+    public let language:String
+    /// The article's title there, with spaces.
+    public let title:String
+    public init(language:String,title:String) {self.language=language;self.title=title.replacingOccurrences(of:"_",with:" ")}
+    /// That Wikipedia's Wikimedia project: "frwiki".
+    public var project:String {LinkMapLibrary.project(forLanguage:language)}
+    /// The language's name for the reader: "French".
+    public var name:String {LinkMapLibrary.languageName(language)}
+}
+
+extension LinkMapLibrary {
+    /// "fr" → "frwiki", "zh-yue" → "zh_yuewiki": Wikimedia's project names, as packages are matched by.
+    public static func project(forLanguage code:String)->String {
+        let special=["be-tarask":"be_x_oldwiki"]
+        return special[code] ?? code.lowercased().replacingOccurrences(of:"-",with:"_")+"wiki"
+    }
+
+    /// A language's name in the reader's language ("French"), or its code when there's no name for it.
+    public static func languageName(_ code:String,locale:Locale = .current)->String {
+        if code == "simple" {return "Simple English"}
+        guard let name=locale.localizedString(forLanguageCode:code),!name.isEmpty,name.lowercased() != code.lowercased() else {return code}
+        return name.prefix(1).uppercased()+name.dropFirst()
+    }
+
+    /// Language names a reader might type, folded, with their codes: English names ("french"),
+    /// each language's own name ("français") and names in the reader's language.
+    static let knownLanguages:[String:String]={
+        var names:[String:String]=["simple":"simple","simple english":"simple"]
+        let english=Locale(identifier:"en_US")
+        for code in Locale.LanguageCode.isoLanguageCodes.map(\.identifier) where code.count<=3 {
+            names[code]=code
+            for name in [english.localizedString(forLanguageCode:code),Locale(identifier:code).localizedString(forLanguageCode:code),
+                         Locale.current.localizedString(forLanguageCode:code)].compactMap({$0}) {
+                let folded=foldLanguage(name)
+                if !folded.isEmpty,names[folded] == nil {names[folded]=code}
+            }
+        }
+        return names
+    }()
+
+    static func foldLanguage(_ text:String)->String {
+        var folded=text.folding(options:[.caseInsensitive,.diacriticInsensitive],locale:Locale(identifier:"en_US"))
+            .trimmingCharacters(in:.whitespacesAndNewlines.union(.punctuationCharacters))
+        for prefix in ["the "] where folded.hasPrefix(prefix) {folded=String(folded.dropFirst(prefix.count))}
+        for suffix in [" wikipedia"," version"," language"," edition"] where folded.hasSuffix(suffix) {folded=String(folded.dropLast(suffix.count))}
+        return folded.split(whereSeparator:\.isWhitespace).joined(separator:" ")
+    }
+
+    /// The language code a name means: a code ("fr"), an English name ("French"), the language's
+    /// own name ("français") or its name in the reader's language. With `codes`, only those count,
+    /// and Wikipedia's own codes that aren't ISO languages ("zh-yue", "simple") are matched too.
+    public static func languageCode(named raw:String,among codes:[String]?=nil)->String? {
+        let folded=foldLanguage(raw)
+        guard !folded.isEmpty else {return nil}
+        if let codes {
+            if let code=codes.first(where:{$0.lowercased() == folded}) {return code}
+            if let known=knownLanguages[folded],codes.contains(known) {return known}
+            for code in codes {
+                var names:[String]=[languageName(code),languageName(code,locale:Locale(identifier:"en_US"))]
+                if let own=Locale(identifier:code).localizedString(forLanguageCode:code) {names.append(own)}
+                if names.contains(where:{foldLanguage($0) == folded}) {return code}
+            }
+            return nil
+        }
+        return knownLanguages[folded]
+    }
+}
+
+extension LinkMap {
+    /// The article's counterparts in other languages, sorted by language name.
+    public func languageLinks(of node:Int32)->[LanguageLink] {
+        languages(of:node).map {LanguageLink(language:$0.language,title:$0.title)}.sorted {$0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending}
+    }
+
+    /// "“Paris” is in 250 other languages, according to …. You have packages for French (“Paris”) and German (“Paris”)."
+    public func languagesAnswer(_ node:Int32,links:[LanguageLink],installed:Set<String>)->String {
+        let title=readableTitle(node)
+        guard !links.isEmpty else {return "“\(title)” has no article in another language in \(sourceName)."}
+        var text="“\(title)” has an article in \(LibraryRun.format(links.count)) other language\(links.count == 1 ? "" : "s"), according to \(sourceName)."
+        let readable=links.filter {installed.contains($0.project)}
+        if readable.isEmpty {
+            let common=["fr","de","es","ja","zh","ru","it","pt","ar"].compactMap {code in links.first {$0.language == code}}
+            let named:[String]=common.prefix(5).map {"\($0.name) (“\($0.title)”)"}
+            if !named.isEmpty {text += " Among them: \(named.joined(separator:", "))."}
+            text += " None of them has a Wikipedia package in your library yet."
+        } else {
+            let named:[String]=readable.map {"\($0.name) (“\($0.title)”)"}
+            text += " You can read it in \(named.joined(separator:", ")): use the Languages menu, or say “open this in \(readable[0].name)”."
+        }
+        return text
+    }
+
+    // MARK: Subcategories
+
+    /// "Category:Jazz musicians has 14 subcategories: …" (the fullest first).
+    public func subcategoriesAnswer(_ category:Int32)->String {
+        let name=categoryName(category).replacingOccurrences(of:"_",with:" ")
+        let sized:[(id:Int32,size:Int)]=subcategories(category).map {($0,memberCount($0))}
+        let children=sized.sorted {$0.size != $1.size ? $0.size>$1.size : $0.id<$1.id}
+        guard !children.isEmpty else {return "Category:\(name) has no subcategories in \(sourceName)."}
+        let shown:[String]=children.prefix(25).map {categoryName($0.id).replacingOccurrences(of:"_",with:" ")}
+        let more=children.count>25 ? ", …" : ""
+        let noun=children.count == 1 ? "subcategory" : "subcategories"
+        return "Category:\(name) has \(LibraryRun.format(children.count)) \(noun), according to \(sourceName): \(shown.joined(separator:", "))\(more)."
+    }
+
+    /// "Category:Jazz pianists is filed in 2 categories: Jazz musicians, Pianists."
+    public func parentsAnswer(_ category:Int32)->String {
+        let name=categoryName(category).replacingOccurrences(of:"_",with:" ")
+        let names=parentCategories(category).map(categoryName)
+        let shown=names.filter {!LinkMap.isMaintenance($0)}.map {$0.replacingOccurrences(of:"_",with:" ")}.sorted()
+        guard !names.isEmpty else {return "Category:\(name) isn't inside any other category in \(sourceName)."}
+        var text="Category:\(name) is inside \(shown.count) categor\(shown.count == 1 ? "y" : "ies")"
+        if !shown.isEmpty {
+            let more=shown.count>25 ? ", …" : ""
+            text += ": \(shown.prefix(25).joined(separator:", "))\(more)"
+        }
+        let hidden=names.count-shown.count
+        if hidden>0 {text += " (plus \(hidden) maintenance categor\(hidden == 1 ? "y" : "ies"))"}
+        return text+". From \(sourceName)."
+    }
+
+    /// The articles in a category's whole tree: "2,345 articles are in Category:Jazz musicians or the 312 categories inside it…"
+    public func categoryTreeAnswer(_ category:Int32,tree:CategoryTree,members:[Int32],list:Bool)->String {
+        let name=categoryName(category).replacingOccurrences(of:"_",with:" ")
+        let inside=tree.categories.count-1
+        var text="\(LibraryRun.format(members.count)) article\(members.count == 1 ? " is" : "s are") in Category:\(name)"
+        if inside>0 {
+            let noun=inside == 1 ? "category" : "categories",levels=tree.depth == 1 ? "1 level" : "\(tree.depth) levels"
+            text += " or the \(LibraryRun.format(inside)) \(noun) inside it (\(levels) down)"
+        }
+        else {text += ", which has no subcategories"}
+        text += ", each article counted once, according to \(sourceName)."
+        if tree.cut {text += " The tree goes on further: I followed it \(tree.depth) levels down and \(LibraryRun.format(LinkMap.defaultTreeLimit)) categories at most, because Wikipedia's categories drift into neighbouring topics the deeper they go."}
+        if list,!members.isEmpty {
+            let ranked:[(id:Int32,links:Int)]=members.map {($0,inDegree($0))}
+            let top:[String]=ranked.sorted {$0.links != $1.links ? $0.links>$1.links : $0.id<$1.id}.prefix(5).map {readableTitle($0.id)}
+            text += " Most linked-to first: \(top.joined(separator:", "))."
+        }
+        return text
+    }
+}
+
 // MARK: - Answers
 
 extension LibraryRequest {
@@ -160,6 +309,21 @@ extension LinkMap {
     public func membersByPopularity(_ category:Int32)->[Int32] {
         members(category).map {($0,inDegree($0))}.sorted {$0.1 != $1.1 ? $0.1>$1.1 : $0.0<$1.0}.map(\.0)
     }
+    /// The articles anywhere in a category tree, most linked-to first.
+    public func membersByPopularity(of tree:CategoryTree)->[Int32] {
+        let ranked:[(id:Int32,links:Int)]=members(of:tree).map {($0,inDegree($0))}
+        return ranked.sorted {$0.links != $1.links ? $0.links>$1.links : $0.id<$1.id}.map(\.id)
+    }
+    /// Why a map can't answer subcategory questions.
+    public var subcategoriesMissing:String {
+        manifest.version<2 ? "This link map was built before Sematrica knew subcategories. Build it again under Packages → Installed → Link maps to add them."
+                           : "This link map has no subcategories: its categorylinks table listed none."
+    }
+    /// Why a map can't answer questions about other languages.
+    public var languagesMissing:String {
+        manifest.version<2 ? "This link map was built before Sematrica knew other languages. Download the langlinks table of the same dump under Packages, then build the map again."
+                           : "This link map was built without the langlinks table, so it doesn't know other languages. Download that table under Packages, then build the map again."
+    }
 
     /// "1,234 articles link to “Paris”, according to Wikipedia's link map (2026-10-01). Most linked-to: …"
     /// - Parameter sources: `backlinksByPopularity(node)`, if already worked out.
@@ -177,6 +341,8 @@ extension LinkMap {
         let articles=known ?? membersByPopularity(category),name=categoryName(category).replacingOccurrences(of:"_",with:" ")
         var text="\(LibraryRun.format(articles.count)) article\(articles.count == 1 ? " is" : "s are") in Category:\(name), directly rather than through its subcategories, according to \(sourceName)."
         if list,!articles.isEmpty {text += " Most linked-to first: "+articles.prefix(5).map(readableTitle).joined(separator:", ")+"."}
+        let inside=subcategories(category).count
+        if inside>0 {text += " It also has \(LibraryRun.format(inside)) subcategor\(inside == 1 ? "y" : "ies"); ask “including subcategories” to count their articles too."}
         return text
     }
 

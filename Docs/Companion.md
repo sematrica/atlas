@@ -39,6 +39,10 @@ Anything that combines a **target**, **conditions** and an **action**:
 | keep looking | Continues a connection search that stopped after its first batch. |
 | how many articles are in the category Jazz pianists · which articles are in Category:Jazz pianists | Counts or lists a Wikipedia category's articles (needs a link map). |
 | what categories is this article in · what categories does Ray Charles belong to | Lists an article's categories (needs a link map). |
+| how many articles are in Jazz musicians including subcategories | Counts the articles anywhere in the category's tree, each once (needs a link map). |
+| what are the subcategories of Jazz musicians · what are the parent categories of Jazz pianists | Lists the categories inside a category, or the ones it's inside (needs a link map). |
+| what is this article called in French · which languages is this article in | The article's title in other languages' Wikipedias, and which have it (needs a link map with `langlinks`). |
+| open this in German · switch to French · open the Japanese version of Paris | Opens the same article in your installed Wikipedia package of that language. |
 
 **Targets:** words (or nouns, verbs, adjectives, adverbs…), letters, characters, numbers, sentences, paragraphs, headings, links, images, names (people, places, organizations), and exact phrases.
 **Conditions:** starts with, ends with, contains or equals a spelling (with "or" alternatives), the negatives of those, part of speech, uppercase/lowercase/capitalized, length in letters or words, a section or sections to skip, unique spellings, and order (first, last, longest, shortest, most and least common, with a rank or a limit).
@@ -96,7 +100,8 @@ A ZIM package holds each article's page but no index of which pages link where. 
 3. `linktarget` (dumps from 2024 on, whose links point into this table instead of naming titles).
 4. `pagelinks`: links between articles. Red links, links from talk or user pages, and links into other namespaces are left out.
 5. Both directions of every link are sorted into per-article lists.
-6. `categorylinks` (optional): which articles are directly in which categories.
+6. `categorylinks` (optional): which articles are directly in which categories, and which categories are inside which.
+7. `langlinks` (optional): each article's title in other languages' Wikipedias.
 
 The files go into `indexes/linkmap-<wiki>-<date>/` (built in a `.building` folder and renamed only when complete) and are memory-mapped when used, so opening even English Wikipedia's map takes a moment and little memory. The build checks there's enough free space first and can be cancelled. A Wikipedia package uses the newest map for its wiki, matched by the package's name (`wikipedia_en_all_maxi` → `enwiki`, `wikipedia_en_simple_all` → `simplewiki`). Other collections, like Wiktionary or Gutenberg, have no link map.
 
@@ -104,7 +109,13 @@ The files go into `indexes/linkmap-<wiki>-<date>/` (built in a `.building` folde
 
 **What links here.** "Which articles link to Paris?", "what links here" and "how many articles link to this article" are answered from the map, at once, for every article in the wiki, not only those that mention the title. Each article counts once, and links through redirects are included. The list under the reply shows the articles this package has, most linked-to first. Each one opens the article and highlights its links to the page. Questions the map can't answer exactly still read articles as before: links only in one section, or "how many times" (the map doesn't count repeated links within a page the way the page does).
 
-**Categories.** "How many articles are in the category Jazz pianists?", "which articles are in Category:Jazz pianists" and "what categories is this article in?" come from `categorylinks`. A category's count is of the articles directly in it, not in its subcategories. Maintenance categories editors use ("Articles with short description", "CS1 maint: …", "… stubs") are counted but not listed. A map built without `categorylinks` answers links but not categories.
+**Categories.** "How many articles are in the category Jazz pianists?", "which articles are in Category:Jazz pianists" and "what categories is this article in?" come from `categorylinks`. A category's count is of the articles directly in it, and the answer says how many subcategories it also has. Maintenance categories editors use ("Articles with short description", "CS1 maint: …", "… stubs") are counted but not listed. A map built without `categorylinks` answers links but not categories.
+
+**Subcategories.** The same table records which categories sit inside which, so "what are the subcategories of Jazz musicians", "what are the parent categories of Jazz pianists" and "how many articles are in Jazz musicians including subcategories" work too. Counting through subcategories follows the tree level by level and counts each article once. Wikipedia's categories form a web rather than a tree: a category can sit inside its own subcategory, and the deeper levels drift into neighbouring topics (from *Jazz musicians* down to the members of one band). So each category is visited once, and the count stops five levels down or at 3,000 categories. The answer says how far it went, and whether the tree goes on.
+
+**Other languages.** With `langlinks`, the map knows each article's title in other languages' Wikipedias. A **Languages** menu appears in the browser's toolbar: the languages you have a Wikipedia package for open the same article there, and **All Languages** lists the rest so you know what exists. The companion answers "what is this article called in French", "which languages is this article in" and "open this in German" or "switch to French". Packages are matched by the language in their name (`wikipedia_fr_all_maxi` is French). The other language's package uses its own link map, if one is built. Each map knows only its own wiki's links and categories.
+
+Maps built before subcategories and other languages still work. Packages lists them with a note to rebuild from the same tables, plus `langlinks`, to add those.
 
 ## Models
 
@@ -125,4 +136,6 @@ For speed, Sematrica uses one context size for every request (changing it makes 
 - Phrase hunts are deliberately local: the spider can't see the target until it is nearby, so a hunt can take a while.
 - Exploration across articles needs a chat model and stops after a bounded number of articles or evaluations.
 - A link map is as old as its dump. Articles newer than the dump fall back to reading, and "what links here" reflects the wiki on the dump's date, not the package's.
-- Building English Wikipedia's link map needs a few GB of memory and, while it runs, free space of about three times the `pagelinks` file.
+- Building English Wikipedia's link map needs a few GB of memory and, while it runs, free space of about three times the `pagelinks` file plus twice the `langlinks` file.
+- Counting through subcategories stops five levels down or at 3,000 categories, and says so.
+- Reading an article in another language needs a Wikipedia package of that language in your library.

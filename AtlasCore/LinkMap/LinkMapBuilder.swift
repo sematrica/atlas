@@ -11,8 +11,11 @@ public struct LinkMapSources:Sendable,Equatable {
     public var linktarget:URL?
     /// Optional: without it there are no categories.
     public var categorylinks:URL?
-    public init(project:String,date:String,page:URL,redirect:URL,pagelinks:URL,linktarget:URL?=nil,categorylinks:URL?=nil) {
-        self.project=project;self.date=date;self.page=page;self.redirect=redirect;self.pagelinks=pagelinks;self.linktarget=linktarget;self.categorylinks=categorylinks
+    /// Optional: each article's title in other languages' Wikipedias.
+    public var langlinks:URL?
+    public init(project:String,date:String,page:URL,redirect:URL,pagelinks:URL,linktarget:URL?=nil,categorylinks:URL?=nil,langlinks:URL?=nil) {
+        self.project=project;self.date=date;self.page=page;self.redirect=redirect;self.pagelinks=pagelinks;self.linktarget=linktarget
+        self.categorylinks=categorylinks;self.langlinks=langlinks
     }
 }
 
@@ -32,7 +35,9 @@ public struct LinkMapProgress:Sendable,Equatable {
 /// 3. `linktarget` (2024-on dumps): link targets are matched to articles and categories.
 /// 4. `pagelinks`: links between articles, with links to redirects counted as links to their articles.
 /// 5. Links are sorted into per-article lists, in both directions.
-/// 6. `categorylinks` (optional): which articles are in which categories.
+/// 6. `categorylinks` (optional): which articles are in which categories, and which categories
+///    are subcategories of which.
+/// 7. `langlinks` (optional): each article's title in other languages' Wikipedias.
 ///
 /// Files are written into a `.building` folder that is renamed into place only when complete.
 public enum LinkMapBuilder {
@@ -60,7 +65,7 @@ public enum LinkMapBuilder {
     /// plus a temporary copy of every link, judged from the compressed tables' sizes.
     public static func estimatedSpace(_ sources:LinkMapSources)->Int64 {
         func size(_ url:URL?)->Int64 {Int64((try? url?.resourceValues(forKeys:[.fileSizeKey]).fileSize) ?? 0)}
-        return 3*size(sources.pagelinks)+size(sources.categorylinks)+size(sources.page)+size(sources.linktarget)+(256<<20)
+        return 3*size(sources.pagelinks)+size(sources.categorylinks)+size(sources.page)+size(sources.linktarget)+2*size(sources.langlinks)+(256<<20)
     }
 
     /// Which schema a dump's links use, from its column list.
@@ -88,11 +93,13 @@ private final class Builder {
     // Categories.
     var categoryNames=StringArena()
     var categoryIndex:[String:Int32]=[:]
+    var categoryPage:[Int32:Int32]=[:]   // a category page's page_id → category number
     var populatedCategories=0
+    var subcategoryLinks=0
 
     init(sources:LinkMapSources,folder:URL,progress:@escaping @Sendable (LinkMapProgress) -> Void) {
         self.sources=sources;self.folder=folder;report=progress
-        steps=4+(sources.linktarget == nil ? 0 : 1)+(sources.categorylinks == nil ? 0 : 1)
+        steps=4+(sources.linktarget == nil ? 0 : 1)+(sources.categorylinks == nil ? 0 : 1)+(sources.langlinks == nil ? 0 : 1)
     }
 
     func begin(_ stage:String) {step += 1;report(.init(step:step,steps:steps,stage:stage,fraction:0))}
@@ -123,9 +130,15 @@ private final class Builder {
         titleNode=[:];targetNode=[]
         var memberships=0
         if let categorylinks=sources.categorylinks {memberships=try readCategories(categorylinks,newSchema:newCategories)}
+        categoryPage=[:]
+        var languages=(links:0,count:0)
+        if let langlinks=sources.langlinks {languages=try readLanguageLinks(langlinks)}
         try titles.write(to:file("titles.strings"))
-        return LinkMapManifest(project:sources.project,date:sources.date,articles:titles.count,links:linkCount,
-                               categories:memberships>0 ? populatedCategories : 0,memberships:memberships)
+        var manifest=LinkMapManifest(project:sources.project,date:sources.date,articles:titles.count,links:linkCount,
+                                     categories:memberships>0 || subcategoryLinks>0 ? populatedCategories : 0,memberships:memberships)
+        manifest.subcategoryLinks=subcategoryLinks
+        manifest.languageLinks=languages.links;manifest.languages=languages.count
+        return manifest
     }
 
     static func setting(_ array:inout [Int32],_ index:Int,_ value:Int32) {
@@ -140,8 +153,12 @@ private final class Builder {
     // 1. page
     func readPages() throws {
         begin("Reading article titles")
+        let categories=sources.categorylinks != nil
         try SQLDump.read(sources.page,table:"page",wanted:["page_id","page_namespace","page_title","page_is_redirect"],progress:fraction("Reading article titles")) {row in
-            guard row[1].int == 0,let id=row[0].int,id>=0,let title=row[2].bytes else {return}
+            guard let id=row[0].int,id>=0,let title=row[2].bytes else {return}
+            // Category pages, so subcategory entries can name the category they're about.
+            if row[1].int == 14,categories,row[3].int != 1,id<=Int64(Int32.max) {categoryPage[Int32(id)]=categoryID(title);return}
+            guard row[1].int == 0 else {return}
             if row[3].int == 1 {
                 Self.setting(&pageNode,Int(id),-Int32(redirectTitles.count)-2)
                 redirectTitles.append(title)
@@ -239,13 +256,18 @@ private final class Builder {
         begin("Reading categories")
         let pairs=file("categories.tmp")
         let writer=try PairWriter(pairs)
-        var perArticle=[UInt32](repeating:0,count:titles.count),perCategory:[UInt32]=[]
-        let page=Array("page".utf8)
+        let nested=file("subcategories.tmp")
+        let nesting=try PairWriter(nested)
+        var perArticle=[UInt32](repeating:0,count:titles.count),perCategory:[UInt32]=[],children:[UInt32]=[],parents:[UInt32]=[]
+        func count(_ array:inout [UInt32],_ index:Int32) {
+            if Int(index)>=array.count {array.append(contentsOf:repeatElement(0,count:Int(index)+1-array.count))}
+            array[Int(index)] += 1
+        }
+        let page=Array("page".utf8),subcategory=Array("subcat".utf8)
         let wanted=newSchema ? ["cl_from","cl_type","cl_target_id"] : ["cl_from","cl_type","cl_to"]
         try SQLDump.read(url,table:"categorylinks",wanted:wanted,optional:["cl_type"],progress:fraction("Reading categories")) {row in
-            let article=pageValue(row[0].int)
-            guard article>=0 else {return}
-            if let type=row[1].bytes,type != page {return}
+            let type=row[1].bytes
+            if let type,type != page,type != subcategory {return}
             var category:Int32 = -1
             if newSchema {
                 if let id=row[2].int,id>=0,Int(id)<targetCategory.count {category=targetCategory[Int(id)]}
@@ -253,19 +275,34 @@ private final class Builder {
                 category=categoryID(name)
             }
             guard category>=0 else {return}
+            if type == subcategory {
+                // A category page filed in another category: a subcategory.
+                guard let id=row[0].int,id>=0,id<=Int64(Int32.max),let child=categoryPage[Int32(id)],child != category else {return}
+                try nesting.append(UInt32(category),UInt32(child))
+                count(&children,category);count(&parents,child)
+                return
+            }
+            let article=pageValue(row[0].int)
+            guard article>=0 else {return}
             try writer.append(UInt32(category),UInt32(article))
             perArticle[Int(article)] += 1
-            if Int(category)>=perCategory.count {perCategory.append(contentsOf:repeatElement(0,count:Int(category)+1-perCategory.count))}
-            perCategory[Int(category)] += 1
+            count(&perCategory,category)
         }
-        try writer.close()
-        if perCategory.count<categoryNames.count {perCategory.append(contentsOf:repeatElement(0,count:categoryNames.count-perCategory.count))}
+        try writer.close();try nesting.close()
+        func padded(_ array:[UInt32])->[UInt32] {array.count<categoryNames.count ? array+repeatElement(0,count:categoryNames.count-array.count) : array}
+        perCategory=padded(perCategory);children=padded(children);parents=padded(parents)
+        subcategoryLinks=nesting.count
+        if nesting.count>0 {
+            try writeAdjacency(edges:nested,count:nesting.count,keyIsFirst:true,degrees:children,offsets:file("subcategories.offsets"),targets:file("subcategories.targets"),fraction:{_ in})
+            try writeAdjacency(edges:nested,count:nesting.count,keyIsFirst:false,degrees:parents,offsets:file("supercategories.offsets"),targets:file("supercategories.targets"),fraction:{_ in})
+        }
+        try? FileManager.default.removeItem(at:nested)
         try writeAdjacency(edges:pairs,count:writer.count,keyIsFirst:true,degrees:perCategory,offsets:file("members.offsets"),targets:file("members.targets"),fraction:fraction("Reading categories"))
         try writeAdjacency(edges:pairs,count:writer.count,keyIsFirst:false,degrees:perArticle,offsets:file("articlecategories.offsets"),targets:file("articlecategories.targets"),fraction:{_ in})
         try? FileManager.default.removeItem(at:pairs)
         try categoryNames.write(to:file("categories.strings"))
-        // Only categories with articles directly in them can be looked up, whichever dump layout listed them.
-        var order=(0..<categoryNames.count).filter {perCategory[$0]>0}
+        // Only categories with articles or subcategories in them can be looked up, whichever dump layout listed them.
+        var order=(0..<categoryNames.count).filter {perCategory[$0]>0 || children[$0]>0}
         order.sort {categoryNames.slice($0).lexicographicallyPrecedes(categoryNames.slice($1))}
         populatedCategories=order.count
         var keys=StringArena()
@@ -274,6 +311,35 @@ private final class Builder {
         try keys.write(to:file("categorylookup.strings"))
         try NumberFile.write(order.map {UInt32($0)},to:file("categorylookup.ids"))
         return writer.count
+    }
+
+    // 7. langlinks
+    /// Each article's title in other languages, grouped by article: the language of each entry in
+    /// `languagelinks.offsets/targets` (numbers into `languages.strings`), its title in `languagelinks.strings`.
+    func readLanguageLinks(_ url:URL) throws -> (links:Int,count:Int) {
+        begin("Reading other languages")
+        var codes:[String:UInt32]=[:],codeNames=StringArena()
+        var nodes:[Int32]=[],languages:[UInt32]=[],names=StringArena()
+        try SQLDump.read(url,table:"langlinks",wanted:["ll_from","ll_lang","ll_title"],progress:fraction("Reading other languages")) {row in
+            let node=pageValue(row[0].int)
+            guard node>=0,let language=row[1].bytes,!language.isEmpty,let title=row[2].bytes,!title.isEmpty else {return}
+            let key=String(decoding:language,as:UTF8.self)
+            let code:UInt32
+            if let known=codes[key] {code=known} else {code=UInt32(codes.count);codes[key]=code;codeNames.append(language)}
+            nodes.append(node);languages.append(code);names.append(title)
+        }
+        // Group the entries by article, keeping each article's own order (the dump's, by language).
+        var starts=[UInt64](repeating:0,count:titles.count+1)
+        for node in nodes {starts[Int(node)+1] += 1}
+        for index in 0..<titles.count {starts[index+1] += starts[index]}
+        var cursor=Array(starts.dropLast()),order=[Int32](repeating:0,count:nodes.count)
+        for (entry,node) in nodes.enumerated() {order[Int(cursor[Int(node)])]=Int32(entry);cursor[Int(node)] += 1}
+        nodes=[]
+        try NumberFile.write(starts,to:file("languagelinks.offsets"))
+        try NumberFile.write(order.map {languages[Int($0)]},to:file("languagelinks.targets"))
+        try names.write(to:file("languagelinks.strings"),order:order)
+        try codeNames.write(to:file("languages.strings"))
+        return (order.count,codeNames.count)
     }
 
     /// Writes adjacency lists from a file of (UInt32, UInt32) pairs: grouped by the first value
@@ -319,6 +385,21 @@ struct StringArena {
         let writer=try NumberFile.Writer<UInt64>(url,count:count,header:true)
         try writer.append(offsets)
         try writer.appendBytes(bytes)
+        try writer.close(checkCount:false)
+    }
+    /// The same, with the strings in another order: `order[i]` is the string written i-th.
+    func write(to url:URL,order:[Int32]) throws {
+        let writer=try NumberFile.Writer<UInt64>(url,count:order.count,header:true)
+        var positions=[UInt64](repeating:0,count:order.count+1)
+        for (index,entry) in order.enumerated() {positions[index+1]=positions[index]+offsets[Int(entry)+1]-offsets[Int(entry)]}
+        try writer.append(positions)
+        var buffer:[UInt8]=[]
+        buffer.reserveCapacity(8<<20)
+        for entry in order {
+            buffer.append(contentsOf:slice(Int(entry)))
+            if buffer.count>=8<<20 {try writer.appendBytes(buffer);buffer.removeAll(keepingCapacity:true)}
+        }
+        try writer.appendBytes(buffer)
         try writer.close(checkCount:false)
     }
 }

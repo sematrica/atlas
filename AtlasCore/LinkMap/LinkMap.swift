@@ -20,6 +20,11 @@ public final class LinkMap:Sendable {
     let categoryLookupIDs:MappedNumbers<UInt32>?
     let members:MappedAdjacency?
     let articleCategories:MappedAdjacency?
+    let subcategoryLists:MappedAdjacency?
+    let parentLists:MappedAdjacency?
+    let languageCodes:MappedStrings?
+    let languageLists:MappedAdjacency?
+    let languageTitles:MappedStrings?
 
     public static let manifestName="manifest.json"
 
@@ -27,8 +32,9 @@ public final class LinkMap:Sendable {
         self.directory=directory
         let data=try Data(contentsOf:directory.appendingPathComponent(Self.manifestName))
         manifest=try JSONDecoder().decode(LinkMapManifest.self,from:data)
-        guard manifest.version == LinkMapManifest.currentVersion else {throw LinkMapError.outdated}
+        guard (1...LinkMapManifest.currentVersion).contains(manifest.version) else {throw LinkMapError.outdated}
         func file(_ name:String)->URL {directory.appendingPathComponent(name)}
+        func exists(_ name:String)->Bool {FileManager.default.fileExists(atPath:file(name).path)}
         titles=try MappedStrings(file("titles.strings"))
         lookup=try MappedStrings(file("lookup.strings"))
         lookupNodes=try MappedNumbers(file("lookup.nodes"))
@@ -43,6 +49,17 @@ public final class LinkMap:Sendable {
         } else {
             categoryNames=nil;categoryLookup=nil;categoryLookupIDs=nil;members=nil;articleCategories=nil
         }
+        // Maps built before version 2 have neither subcategories nor other languages.
+        if (manifest.subcategoryLinks ?? 0)>0 {
+            subcategoryLists=try MappedAdjacency(offsets:file("subcategories.offsets"),targets:file("subcategories.targets"))
+            parentLists=try MappedAdjacency(offsets:file("supercategories.offsets"),targets:file("supercategories.targets"))
+        } else {subcategoryLists=nil;parentLists=nil}
+        if (manifest.languageLinks ?? 0)>0,exists("languages.strings") {
+            languageCodes=try MappedStrings(file("languages.strings"))
+            languageLists=try MappedAdjacency(offsets:file("languagelinks.offsets"),targets:file("languagelinks.targets"))
+            languageTitles=try MappedStrings(file("languagelinks.strings"))
+            guard languageLists?.rows == manifest.articles,languageTitles?.count == languageLists?.targets.count else {throw LinkMapError.damaged}
+        } else {languageCodes=nil;languageLists=nil;languageTitles=nil}
         guard titles.count == manifest.articles,forward.rows == manifest.articles,backward.rows == manifest.articles else {throw LinkMapError.damaged}
     }
 
@@ -138,16 +155,21 @@ public final class LinkMap:Sendable {
 
     // MARK: Categories
 
-    public var hasCategories:Bool {members != nil}
-    /// Categories with at least one article directly in them.
+    public var hasCategories:Bool {members != nil || subcategoryLists != nil}
+    /// Categories with articles or subcategories in them.
     public var categoryCount:Int {manifest.categories}
+    /// The map knows which categories are inside which (maps built since version 2 with categorylinks).
+    public var hasSubcategories:Bool {subcategoryLists != nil}
 
     /// A category by name, with or without "Category:".
     public func category(_ raw:String)->Int32? {
         guard let categoryLookup,let categoryLookupIDs else {return nil}
         var name=raw.trimmingCharacters(in:.whitespacesAndNewlines)
-        for prefix in ["Category:","category:","Category_","category "] where name.hasPrefix(prefix) {name=String(name.dropFirst(prefix.count))}
-        for candidate in [Self.normalize(name),name.replacingOccurrences(of:" ",with:"_")] {
+        for prefix in ["Category:","category:"] where name.hasPrefix(prefix) {name=String(name.dropFirst(prefix.count)).trimmingCharacters(in:.whitespaces)}
+        // "Category theory" is a category's own name; "category Jazz" means Jazz. The name as given wins.
+        var names=[name]
+        for prefix in ["Category_","category_","Category ","category "] where name.hasPrefix(prefix) {names.append(String(name.dropFirst(prefix.count)))}
+        for candidate in names.flatMap({[Self.normalize($0),$0.replacingOccurrences(of:" ",with:"_")]}) {
             if let index=categoryLookup.find(Array(candidate.utf8)) {return Int32(categoryLookupIDs[index])}
         }
         return nil
@@ -157,6 +179,58 @@ public final class LinkMap:Sendable {
     public func members(_ category:Int32)->[Int32] {Array(Set(members?.row(Int(category)) ?? [])).sorted()}
     public func memberCount(_ category:Int32)->Int {members(category).count}
     public func categories(of node:Int32)->[Int32] {Array(Set(articleCategories?.row(Int(node)) ?? [])).sorted()}
+    /// The categories directly inside a category.
+    public func subcategories(_ category:Int32)->[Int32] {
+        guard let subcategoryLists,Int(category)<subcategoryLists.rows,category>=0 else {return []}
+        return Array(Set(subcategoryLists.row(Int(category)))).sorted()
+    }
+    /// The categories a category is filed in.
+    public func parentCategories(_ category:Int32)->[Int32] {
+        guard let parentLists,Int(category)<parentLists.rows,category>=0 else {return []}
+        return Array(Set(parentLists.row(Int(category)))).sorted()
+    }
+
+    /// A category and everything inside it, level by level. Wikipedia's categories form a web
+    /// rather than a tree (a category can sit inside its own subcategory), so each is visited once,
+    /// and the search stops `maxDepth` levels down or after `limit` categories.
+    public func categoryTree(_ category:Int32,maxDepth:Int=defaultTreeDepth,limit:Int=defaultTreeLimit)->CategoryTree {
+        var seen:Set<Int32>=[category],level=[category],all=[category],depth=0,cut=false
+        while !level.isEmpty,depth<maxDepth {
+            var next:[Int32]=[]
+            for parent in level {
+                for child in subcategories(parent) where seen.insert(child).inserted {
+                    if all.count>=limit {cut=true;break}
+                    next.append(child);all.append(child)
+                }
+                if cut {break}
+            }
+            if next.isEmpty {break}
+            depth += 1;level=next
+            if cut {break}
+        }
+        // Deeper categories remain if the last level still has subcategories not yet visited.
+        if !cut,depth == maxDepth,level.contains(where:{subcategories($0).contains {!seen.contains($0)}}) {cut=true}
+        return CategoryTree(categories:all,depth:depth,cut:cut)
+    }
+    public static let defaultTreeDepth=5
+    public static let defaultTreeLimit=3_000
+    /// The articles in a category or any category in its tree, each once.
+    public func members(of tree:CategoryTree)->[Int32] {
+        var seen=Set<Int32>()
+        for category in tree.categories {seen.formUnion(members?.row(Int(category)) ?? [])}
+        return seen.sorted()
+    }
+
+    // MARK: Other languages
+
+    /// The map knows the articles' titles in other languages (built with langlinks).
+    public var hasLanguages:Bool {languageLists != nil}
+    /// The article's title in other languages' Wikipedias, as those Wikipedias name it ("fr", "Paris").
+    public func languages(of node:Int32)->[(language:String,title:String)] {
+        guard let languageLists,let languageTitles,let languageCodes,node>=0,Int(node)<languageLists.rows else {return []}
+        let start=Int(languageLists.offsets[Int(node)])
+        return languageLists.row(Int(node)).enumerated().map {(languageCodes.string(Int($0.element)),languageTitles.string(start+$0.offset))}
+    }
 
     /// Maintenance categories ("Articles with short description", "CS1 maint: …") that readers
     /// rarely mean. The dumps mark hidden categories only in another table, so this goes by name.
@@ -169,8 +243,19 @@ public final class LinkMap:Sendable {
     }
 }
 
+/// A category and the categories inside it, as far as they were followed.
+public struct CategoryTree:Sendable,Equatable {
+    /// The category first, then its subcategories level by level.
+    public let categories:[Int32]
+    /// How many levels down the tree goes.
+    public let depth:Int
+    /// More subcategories remain beyond the depth or size limit.
+    public let cut:Bool
+}
+
 public struct LinkMapManifest:Codable,Sendable,Equatable {
-    public static let currentVersion=1
+    /// 2 added subcategories and other languages; version 1 maps still open without them.
+    public static let currentVersion=2
     public var version=currentVersion
     /// The Wikimedia project ("enwiki") and dump date ("20261001").
     public var project:String
@@ -179,6 +264,11 @@ public struct LinkMapManifest:Codable,Sendable,Equatable {
     public var links:Int
     public var categories:Int
     public var memberships:Int
+    /// Subcategory entries (version 2 on).
+    public var subcategoryLinks:Int?
+    /// Titles in other languages, and how many languages (version 2 on, with langlinks).
+    public var languageLinks:Int?
+    public var languages:Int?
     public var built:Date
     public init(project:String,date:String,articles:Int,links:Int,categories:Int,memberships:Int,built:Date=Date()) {
         self.project=project;self.date=date;self.articles=articles;self.links=links;self.categories=categories;self.memberships=memberships;self.built=built

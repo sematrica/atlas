@@ -41,6 +41,7 @@ struct BrowserView: View {
                         .buttonStyle(.plain).help(showCrawler ? "Hide the companion" : "Show the companion")
                     Spacer()
                     if browser.loading { ProgressView().controlSize(.small) }
+                    languagesMenu
                     Menu {
                         ForEach(browser.headings) { heading in Button(heading.title) { browser.scroll(to:heading) } }
                     } label: { Label("Contents",systemImage:"list.bullet") }.disabled(browser.headings.isEmpty)
@@ -71,6 +72,30 @@ struct BrowserView: View {
             .frame(width:container.size.width,height:container.size.height,alignment:.top)
         }
     }
+    /// The open article in other languages' Wikipedias (from the link map). Languages with an installed
+    /// package open it there; the rest are listed so you know what exists.
+    @ViewBuilder private var languagesMenu: some View {
+        let languages=browser.articleLanguages()
+        if !languages.isEmpty {
+            let readable=languages.filter { $0.record != nil }
+            Menu {
+                if readable.isEmpty { Text("No package in these languages yet") }
+                ForEach(readable) { item in
+                    Button("\(item.link.name) · \(item.link.title)") { if let record=item.record { browser.openArticle(record,item.link.title) } }
+                }
+                Divider()
+                Menu("All \(languages.count) Languages") {
+                    ForEach(languages) { item in
+                        if let record=item.record { Button("\(item.link.name) · \(item.link.title)") { browser.openArticle(record,item.link.title) } }
+                        else { Text("\(item.link.name) · \(item.link.title)") }
+                    }
+                }
+                Button("Get Wikipedia in Another Language…") { library.showReadablePackages(); showLibrary() }
+            } label: { Label(readable.isEmpty ? "Languages" : "Languages (\(readable.count))",systemImage:"globe") }
+                .help("This article in other languages, from the link map")
+        }
+    }
+
     @ViewBuilder private var reader:some View {
         if let web=browser.webView {
                     // NSSplitView retains its previous fitting height. Contain it in

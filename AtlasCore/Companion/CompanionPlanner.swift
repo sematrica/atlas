@@ -64,7 +64,8 @@ public enum CompanionPlanner {
     read: read the whole article before answering "question" (summaries, opinions, anything the excerpts can't answer).
     library: count or find across many articles, exactly. "query" = what to look for in each article. "measure" = articles (how many articles contain it) | total (how many times altogether) | list (which articles). "scope" = library (every article; the default) | linked (articles this article links to; "place" = only links in that section) | titles (the articles named in "titles") | search (the best articles about "topic"). "articles" = at most that many from the scope. "result":"more" continues the last library question where it stopped.
     connect: find the shortest chain of links from one article to another, then walk it with the spider. "title" = the article to reach; "from" = where to start (omit for the open article). "result":"more" keeps looking when the last search stopped early.
-    category: Wikipedia categories. "title" = a category, with "measure" = articles (how many are in it) | list (which). Without "title": the categories an article is in ("from" = that article; omit for the open article).
+    category: Wikipedia categories. "title" = a category, with "measure" = articles (how many are in it) | list (which) | subcategories (the categories inside it) | parents (the categories it's in); "subcategories": true counts or lists the articles in its subcategories too. Without "title": the categories an article is in ("from" = that article; omit for the open article).
+    language: the article in other languages' Wikipedias. "language" = the language ("French"); "measure" = name (what it's called there) | open (open it there, in an installed package) | list (which languages have it; omit "language"). "from" = the article; omit for the open article. Not for translating text.
     "What links here" is a library list with linksTo "this article".
 
     QUERY (omit fields you don't need)
@@ -115,6 +116,12 @@ public enum CompanionPlanner {
     {"steps":[{"action":"category","title":"Jazz pianists","measure":"articles"}],"reply":"Checking the category."}
     User: what categories is this in?
     {"steps":[{"action":"category"}],"reply":"Here are its categories."}
+    User: how many articles are under Jazz musicians, counting all the subcategories?
+    {"steps":[{"action":"category","title":"Jazz musicians","measure":"articles","subcategories":true}],"reply":"Counting through its subcategories."}
+    User: what's the French article for this called?
+    {"steps":[{"action":"language","language":"French","measure":"name"}],"reply":"Let me look it up."}
+    User: let me read this in German
+    {"steps":[{"action":"language","language":"German","measure":"open"}],"reply":"Switching to German."}
     User: open the article on Paris and count its links
     {"steps":[{"action":"open","title":"Paris"},{"action":"count","query":{"unit":"link"}}],"reply":"Opening Paris first."}
     User: when was he born?
