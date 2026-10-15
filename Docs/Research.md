@@ -8,17 +8,18 @@ The engine plans subquestions, searches the open archive, reads selected passage
 
 - Built-in ZIM full-text search is used when available.
 - Otherwise, **Build / Resume Text Index** creates an on-disk SQLite FTS5 index from extracted article paragraphs. Before it finishes, research uses title search and the partial text index. This index is separate from Ask's embedding index.
+- The same text index finds candidate articles for the companion's library questions ("how many articles mention …") when the archive has no built-in full-text index. See [Companion.md](Companion.md#across-the-library).
 - Ordinary research is selective. It expands searches and follows links, with bounded queues and up to 60 search queries per job.
 - **Sequentially review every article** enumerates the archive and processes readable HTML articles in batches. Resume until traversal and the queue finish. Images, resources, and redirects are not separate research articles.
 - Each article contributes up to eight selected passages and five validated notes. Sequential mode does not read every sentence. Failed articles are counted separately; completion is not proof that every possible answer has been found.
 
 ## Saved work and controls
 
-**Articles per batch** controls how many articles are attempted before writing a report. **Pause & Save** cancels the current model request. An interrupted article remains queued and can be retried with **Resume Saved Queue**, including after reopening Atlas. Saved Research lists the 30 most recently updated jobs for this package; older jobs remain in the database.
+**Articles per batch** controls how many articles are attempted before writing a report. **Pause & Save** cancels the current model request. An interrupted article remains queued and can be retried with **Resume Saved Queue**, including after reopening Sematrica. Saved Research lists the 30 most recently updated jobs for this package; older jobs remain in the database.
 
 To redirect, pause, edit the question, then choose **Research Revised Question**. This creates a separate notebook that retains earlier evidence while allowing articles to be reconsidered for the new question. The original notebook remains saved. Resuming an unchanged question continues its existing queue and can use a different selected chat model.
 
-Jobs, visits, notes, and index checkpoints are stored under the library's `indexes/research-<package fingerprint>/research.sqlite`. Switching libraries or opening another package cancels active work. Keep Atlas running for a batch to continue; this is not a background service that wakes while the app is closed.
+Jobs, visits, notes, and index checkpoints are stored under the library's `indexes/research-<package fingerprint>/research.sqlite`. Switching libraries or opening another package cancels active work. Keep Sematrica running for a batch to continue; this is not a background service that wakes while the app is closed.
 
 ## Evidence and model errors
 

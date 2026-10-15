@@ -57,39 +57,114 @@ public enum LocalStringMatcher {
     }
 }
 
-/// A serpentine frontier provides eventual geometric coverage. Curiosity is bounded around that frontier.
+/// Curious, coverage-aware wandering. The page is divided into cells; the next
+/// goal favours unvisited cells, nearby headings, links and images, and the
+/// current direction of travel, so the creature roams naturally instead of
+/// sweeping rows, yet still reaches every part of the page eventually.
 public struct CrawlerNavigator: Sendable {
+    /// The current wandering goal.
     public private(set) var frontier=DocumentPosition.zero
+    /// How many times the whole page has been covered.
     public private(set) var laps=0
-    private var right=true
+    private var visits:[Int:Int]=[:]
+    private var columns=0,rows=0,cell=140.0
+    private var width=0.0,height=0.0
+    private var direction=0.0
     private var initialized=false
     private var seed:UInt64
     public init(seed:UInt64=42) { self.seed=seed }
+    /// Share of page cells visited in this lap.
+    public var coverage:Double {columns*rows == 0 ? 0 : Double(visits.count)/Double(columns*rows)}
     public mutating func random()->Double {
         seed=seed &* 6364136223846793005 &+ 1442695040888963407
         return Double(seed >> 11)/Double(UInt64.max >> 11)
     }
-    public mutating func reset() { initialized=false; laps=0;right=true }
+    public mutating func reset() {initialized=false;laps=0;visits=[:]}
+
+    private mutating func configure(_ observation:CrawlerObservation) {
+        let w=max(40,observation.documentWidth),h=max(40,observation.documentHeight)
+        guard !initialized || abs(w-width)>1 || abs(h-height)>1 else {return}
+        width=w;height=h
+        // Keep the grid small for very long articles.
+        cell=max(140,sqrt(w*h/3000))
+        columns=max(1,Int(ceil(w/cell)));rows=max(1,Int(ceil(h/cell)))
+        if !initialized {visits=[:];direction = .pi/2}
+        else {visits=visits.filter {$0.key<columns*rows}}
+        initialized=true
+    }
+    private func index(_ p:DocumentPosition)->Int {
+        let c=min(columns-1,max(0,Int(p.x/cell))),r=min(rows-1,max(0,Int(p.y/cell)))
+        return r*columns+c
+    }
+    private func center(_ index:Int)->DocumentPosition {
+        .init(x:min(width-20,(Double(index%columns)+0.5)*cell),y:min(height-20,(Double(index/columns)+0.5)*cell))
+    }
+    private func clamp(_ p:DocumentPosition)->DocumentPosition {
+        let margin=20.0
+        return .init(x:min(max(margin,p.x),max(margin,width-margin)),y:min(max(margin,p.y),max(margin,height-margin)))
+    }
+    /// Marks the cells around a position as seen.
+    public mutating func record(_ position:DocumentPosition,radius:Double) {
+        guard initialized else {return}
+        let reach=max(0,Int(radius/cell))
+        let c=min(columns-1,max(0,Int(position.x/cell))),r=min(rows-1,max(0,Int(position.y/cell)))
+        for row in max(0,r-reach)...min(rows-1,r+reach) {
+            for column in max(0,c-reach)...min(columns-1,c+reach) {
+                let i=row*columns+column
+                if center(i).distance(to:position)<=radius+cell*0.5 {visits[i,default:0] += 1}
+            }
+        }
+        if visits.count>=columns*rows {visits=[:];laps += 1}
+    }
+
     public mutating func goal(position:DocumentPosition,observation:CrawlerObservation)->DocumentPosition {
-        let margin=20.0, width=max(40,observation.documentWidth),height=max(40,observation.documentHeight)
-        let stride=max(35,min(130,observation.radius*0.85))
-        if !initialized {
-            frontier = .init(x:margin,y:margin); initialized=true
+        configure(observation)
+        record(position,radius:min(observation.radius,cell*0.75))
+        let current=index(frontier)
+        let keep=frontier != .zero && position.distance(to:frontier)>24 && visits[current] == nil
+        if keep {return frontier}
+
+        var candidates:[(point:DocumentPosition,interest:Double)]=[]
+        // Points scattered around the creature, biased forward.
+        for _ in 0..<10 {
+            let angle=direction+(random()-0.5)*2.6
+            let distance=120+random()*260
+            candidates.append((clamp(.init(x:position.x+cos(angle)*distance,y:position.y+sin(angle)*distance)),0))
         }
-        frontier.x=min(max(margin,frontier.x),width-margin)
-        frontier.y=min(max(margin,frontier.y),height-margin)
-        if position.distance(to:frontier)<16 {
-            let nextX=frontier.x+(right ? stride : -stride)
-            if nextX > width-margin || nextX < margin {
-                if abs(frontier.x-(right ? width-margin : margin)) > 2 {
-                    frontier.x=right ? width-margin : margin
-                } else {
-                    frontier.y += stride; right.toggle()
-                    if frontier.y > height-margin { frontier = .init(x:margin,y:margin);right=true;laps += 1 }
+        // The nearest unvisited cells, so coverage never depends on luck.
+        let here=index(position),hc=here%columns,hr=here/columns
+        var unvisited:[Int]=[]
+        var ring=1
+        while unvisited.count<6 && ring<=max(columns,rows) {
+            for row in max(0,hr-ring)...min(rows-1,hr+ring) {
+                for column in max(0,hc-ring)...min(columns-1,hc+ring) where max(abs(row-hr),abs(column-hc)) == ring {
+                    let i=row*columns+column
+                    if visits[i] == nil {unvisited.append(i)}
                 }
-            } else { frontier.x=nextX }
+            }
+            ring += 1
         }
-        return frontier
+        for i in unvisited.prefix(6) {candidates.append((center(i),0.15))}
+        // Landmarks the creature can actually see.
+        for item in observation.terrain where [.heading,.link,.image].contains(item.kind) {
+            let weight=item.kind == .heading ? 0.5 : item.kind == .image ? 0.35 : 0.25
+            candidates.append((clamp(item.rect.center),weight))
+        }
+        var best:DocumentPosition?,bestScore = -Double.infinity
+        for candidate in candidates {
+            let distance=candidate.point.distance(to:position)
+            guard distance>30 else {continue}
+            let seen=visits[index(candidate.point)] ?? 0
+            let novelty=seen == 0 ? 1.0 : seen == 1 ? 0.35 : 0.1
+            let angle=atan2(candidate.point.y-position.y,candidate.point.x-position.x)
+            let persistence=0.3*cos(atan2(sin(angle-direction),cos(angle-direction)))
+            let score=novelty+candidate.interest+persistence-distance/900+random()*0.15
+            if score>bestScore {bestScore=score;best=candidate.point}
+        }
+        let chosen=best ?? clamp(.init(x:position.x+cos(direction)*150,y:position.y+sin(direction)*150))
+        direction=atan2(chosen.y-position.y,chosen.x-position.x)
+        frontier=chosen
+        return chosen
     }
 }
 
@@ -101,16 +176,18 @@ public struct ProceduralCrawlerAgent: Sendable {
     public private(set) var navigator:CrawlerNavigator
     private var decisionIn=0.0
     private var dwell=0.0
-    private var burstRemaining=0.65
+    /// Time until the next unhurried pause while wandering.
+    private var cruiseRemaining=2.5
     private var lastRevision:Int?
-    private var lastFrontier=DocumentPosition.zero
     private var detour:DocumentPosition?
     public private(set) var guidedGoal:DocumentPosition?
     private var suppressMission=false
     public init(id:UUID=UUID(),seed:UInt64=42) { state=CrawlerState(id:id);navigator=CrawlerNavigator(seed:seed) }
-    public mutating func start(position:DocumentPosition,mission:CrawlerMission) {
+    /// - Parameter seed: a new seed gives each spawn its own wandering; omit it for repeatable tests.
+    public mutating func start(position:DocumentPosition,mission:CrawlerMission,seed:UInt64?=nil) {
         state=CrawlerState(id:state.id,position:position,mission:mission);state.behavior = .spawning
-        state.desired=position; memory=CrawlerMemory(); navigator.reset(); observation=nil;dwell=0.65;decisionIn=0;lastRevision=nil;detour=nil;lastFrontier=position;burstRemaining=0.65;guidedGoal=nil;suppressMission=false
+        if let seed {navigator=CrawlerNavigator(seed:seed)} else {navigator.reset()}
+        state.desired=position; memory=CrawlerMemory(); observation=nil;dwell=0.65;decisionIn=0;lastRevision=nil;detour=nil;cruiseRemaining=2.5;guidedGoal=nil;suppressMission=false
     }
     public mutating func suppressHunt(_ suppressed:Bool) {
         suppressMission=suppressed
@@ -121,7 +198,7 @@ public struct ProceduralCrawlerAgent: Sendable {
     }
     public mutating func endGuidance() {guidedGoal=nil;detour=nil;decisionIn=0}
     public mutating func steer(to position:DocumentPosition) {
-        detour=position;lastFrontier=navigator.frontier;state.desired=position;state.behavior = .walking;decisionIn=0.45
+        detour=position;state.desired=position;state.behavior = .walking;decisionIn=0.45
     }
     public mutating func inspect(for seconds:Double) {state.behavior = .inspecting;dwell=seconds}
     public mutating func confirmDiscovery(_ quote:String)->Bool {
@@ -146,7 +223,8 @@ public struct ProceduralCrawlerAgent: Sendable {
         }
         observation=CrawlerObservation(document:sample.document,revision:sample.revision,center:sample.center,radius:sample.radius,viewport:sample.viewport,documentWidth:sample.documentWidth,documentHeight:sample.documentHeight,terrain:local,truncated:sample.truncated)
         if let previous=lastRevision,previous != sample.revision {
-            state.match=nil; if state.behavior != .paused {state.behavior = .recovering};navigator.reset();decisionIn=0
+            // A reflow moves text but the wandering memory stays; the grid adapts to the new size.
+            state.match=nil; if state.behavior != .paused {state.behavior = .recovering};decisionIn=0
             state.position.x=min(state.position.x,max(20,sample.documentWidth-20))
             state.position.y=min(state.position.y,max(20,sample.documentHeight-20))
         }
@@ -171,12 +249,12 @@ public struct ProceduralCrawlerAgent: Sendable {
             if dwell<=0 { state.behavior = .approachingTarget };return
         }
         if state.behavior == .inspecting && dwell>0 {settle(dt:dt);return}
-        // Bounded bursts give the insect a quick scan-and-scuttle rhythm without changing coverage.
+        // Long, gliding stretches with an occasional unhurried pause to look around.
         if !reduceMotion,state.match == nil,guidedGoal == nil {
-            burstRemaining -= dt
-            if burstRemaining<=0 {
-                burstRemaining=0.4+navigator.random()*0.5
-                state.behavior = .inspecting;dwell=0.10+navigator.random()*0.13
+            cruiseRemaining -= dt
+            if cruiseRemaining<=0 {
+                cruiseRemaining=2.5+navigator.random()*2.5
+                state.behavior = .inspecting;dwell=0.45+navigator.random()*0.5
                 settle(dt:dt);return
             }
         }
@@ -197,47 +275,65 @@ public struct ProceduralCrawlerAgent: Sendable {
         } else if decisionIn<=0 {
             let frontier=navigator.goal(position:state.position,observation:observation)
             if detour?.distance(to:state.position) ?? 0 < 16 {detour=nil}
-            if frontier != lastFrontier {
-                lastFrontier=frontier
-                if case .freeCrawl=state.mission,navigator.random()<0.35,
-                   let interesting=observation.terrain.filter({$0.kind == .heading || $0.kind == .link}).min(by:{$0.rect.center.distance(to:frontier)<$1.rect.center.distance(to:frontier)}) {
-                    detour=interesting.rect.center
-                }
-            }
             state.desired=detour ?? frontier
             decisionIn=0.10
-            if case .freeCrawl=state.mission, navigator.random()<0.04 {
-                state.behavior = .inspecting;dwell=0.16+navigator.random()*0.16
+            if case .freeCrawl=state.mission, navigator.random()<0.01 {
+                state.behavior = .inspecting;dwell=0.4+navigator.random()*0.3
             } else { state.behavior = (state.desired.x-state.position.x)*state.velocity.x+(state.desired.y-state.position.y)*state.velocity.y < 0 ? .turning : .walking }
         }
         if state.behavior == .inspecting && dwell>0 {settle(dt:dt);return}
+        // Aim inside the page margins, so the body slows down before an edge instead of hitting it.
+        let minX=min(20,observation.documentWidth/2),minY=min(20,observation.documentHeight/2)
+        state.desired.x=min(max(minX,state.desired.x),observation.documentWidth-minX)
+        state.desired.y=min(max(minY,state.desired.y),observation.documentHeight-minY)
         let distance=state.position.distance(to:state.desired)
         guard distance>0.5 else {settle(dt:dt);return}
         // Don't outrun the last perception disk; waiting allows the slower senses loop to catch up.
         let perceptionRoom=max(0,observation.radius*0.5-state.position.distance(to:observation.center))
-        if perceptionRoom<=0 {state.velocity = .zero;return}
-        let organic=reduceMotion ? 1 : 0.93+0.07*sin(state.elapsed*9)
+        // Glide to a halt rather than stopping dead while the senses catch up.
+        if perceptionRoom<=0 {settle(dt:dt);return}
+        // A slow breath in the pace, and a gentle approach: the body eases into its destination.
+        let organic=reduceMotion ? 1 : 0.95+0.05*sin(state.elapsed*2.3)
         let magnitude=min(max(0,reduceMotion ? min(speed,84) : speed)*organic,
-                          distance*(reduceMotion ? 5 : 10),perceptionRoom*18)
+                          distance*(reduceMotion ? 3 : 4),perceptionRoom*18)
         let vx=(state.desired.x-state.position.x)/distance*magnitude,vy=(state.desired.y-state.position.y)/distance*magnitude
         let previousSpeed=hypot(state.velocity.x,state.velocity.y)
         let alignment=(state.velocity.x*vx+state.velocity.y*vy)/max(1,previousSpeed*magnitude)
         let turning=previousSpeed>15 && alignment<0.7
-        let response=reduceMotion ? 7.0 : (turning ? 12.0 : 20.0)
+        // Soft acceleration, and wide arcs through turns.
+        let response=reduceMotion ? 4.0 : (turning ? 3.5 : 5.0)
         let smooth=1-exp(-dt*response)
         state.velocity.x += (vx-state.velocity.x)*smooth;state.velocity.y += (vy-state.velocity.y)*smooth
+        cushion()
         state.position=state.position.moved(state.velocity.x*dt,state.velocity.y*dt)
+        confine()
+    }
+
+    private mutating func settle(dt:Double) {
+        let decay=exp(-dt*7)
+        state.velocity.x *= decay;state.velocity.y *= decay
+        if hypot(state.velocity.x,state.velocity.y)<2 {state.velocity = .zero}
+        cushion()
+        state.position=state.position.moved(state.velocity.x*dt,state.velocity.y*dt)
+        confine()
+    }
+    /// Near a page edge, speed toward it fades with the remaining gap, so the body glides to a stop.
+    private mutating func cushion() {
+        guard let observation else {return}
+        let minX=min(20,observation.documentWidth/2),minY=min(20,observation.documentHeight/2),softness=6.0
+        let p=state.position
+        if state.velocity.x<0 {state.velocity.x=max(state.velocity.x,-max(0,p.x-minX)*softness)}
+        if state.velocity.x>0 {state.velocity.x=min(state.velocity.x,max(0,observation.documentWidth-minX-p.x)*softness)}
+        if state.velocity.y<0 {state.velocity.y=max(state.velocity.y,-max(0,p.y-minY)*softness)}
+        if state.velocity.y>0 {state.velocity.y=min(state.velocity.y,max(0,observation.documentHeight-minY-p.y)*softness)}
+    }
+    /// Keeps the body inside the page margins.
+    private mutating func confine() {
+        guard let observation else {return}
         let minX=min(20,observation.documentWidth/2),minY=min(20,observation.documentHeight/2)
         let clampedX=min(max(minX,state.position.x),observation.documentWidth-minX)
         let clampedY=min(max(minY,state.position.y),observation.documentHeight-minY)
         if clampedX != state.position.x {state.velocity.x=0;state.position.x=clampedX}
         if clampedY != state.position.y {state.velocity.y=0;state.position.y=clampedY}
-    }
-
-    private mutating func settle(dt:Double) {
-        let decay=exp(-dt*28)
-        state.velocity.x *= decay;state.velocity.y *= decay
-        if hypot(state.velocity.x,state.velocity.y)<2 {state.velocity = .zero}
-        state.position=state.position.moved(state.velocity.x*dt,state.velocity.y*dt)
     }
 }

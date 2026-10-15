@@ -9,8 +9,8 @@ struct IntelligenceView:View {
     var body:some View {
         ScrollView {
             VStack(alignment:.leading,spacing:22) {
-                Text("Ask Atlas").font(.system(size:32,weight:.medium,design:.serif))
-                Text("Answers from your offline Wikipedia, with passages you can inspect.").foregroundStyle(.secondary)
+                Text("Ask Sematrica").font(.system(size:32,weight:.medium,design:.serif))
+                Text("Answers from your offline library, with passages you can inspect.").foregroundStyle(.secondary)
                 GroupBox("Local intelligence") {
                     VStack(alignment:.leading,spacing:10) {
                         Text(ai.connection).font(.caption)
@@ -19,6 +19,7 @@ struct IntelligenceView:View {
                             Button("Refresh Models") {Task {await ai.refreshModels()}}
                             Button("Test Model") {Task {await ai.testModel()}}.disabled(ai.chatModel.isEmpty)
                         }
+                        CompanionFitRow(ai:ai)
                         Picker("Embedding model",selection:$ai.embeddingModel) {Text("Choose model").tag("");ForEach(ai.embeddingModels) {Text($0.name).tag($0.name)}}
                         Text("Provider: Ollama · Local models only. Chat models write answers; embedding models prepare AI Search. Only compatible installed models are shown.").font(.caption).foregroundStyle(.secondary)
                     }.padding(8)
@@ -63,8 +64,42 @@ struct IntelligenceView:View {
                 }
             }.padding(28).frame(maxWidth:950)
         }
-        .task {await ai.refreshModels();await ai.loadIndex(browser.record)}
-        .onChange(of:ai.chatModel) {ai.saveSettings();browser.crawler.intelligence.model=ai.chatModel}
+        .task {await ai.refreshModels();await ai.evaluateFit();await ai.loadIndex(browser.record)}
+        .onChange(of:ai.chatModel) {ai.saveSettings();browser.crawler.intelligence.model=ai.chatModel;Task {await ai.evaluateFit()}}
         .onChange(of:ai.embeddingModel) {ai.saveSettings();Task {await ai.loadIndex(browser.record)}}
+    }
+}
+
+/// How well the chat model suits the reading companion: an instant estimate and a measured test.
+private struct CompanionFitRow:View {
+    @Bindable var ai:IntelligenceModel
+    var body:some View {
+        VStack(alignment:.leading,spacing:6) {
+            HStack(spacing:8) {
+                Text("Companion fit").font(.callout)
+                if let report=ai.fitReport {
+                    FitBadge(fit:.init(rating:report.rating,summary:report.summary,measured:true))
+                    Text(report.summary).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                } else if let estimate=ai.fitEstimate {
+                    FitBadge(fit:.init(rating:estimate.rating,summary:estimate.summary,measured:false))
+                    Text(estimate.summary).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                } else {
+                    Text(ai.chatModel.isEmpty ? "Choose a chat model." : "Not measured yet.").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if ai.fitTesting {
+                    ProgressView(value:ai.fitProgress).frame(width:110)
+                    Button("Cancel",action:ai.cancelFitTest)
+                } else {
+                    Button("Run Fit Test",action:ai.runFitTest).disabled(ai.chatModel.isEmpty).help("Tries 12 real companion requests and measures accuracy and speed (about a minute)")
+                }
+            }
+            if let estimate=ai.fitEstimate,ai.fitReport == nil {
+                Text(estimate.reasons.joined(separator:" · ")).font(.caption2).foregroundStyle(.secondary)
+            }
+            if let report=ai.fitReport,!report.failures.isEmpty {
+                Text("Misunderstood: "+report.failures.joined(separator:", ")).font(.caption2).foregroundStyle(.secondary)
+            }
+        }
     }
 }

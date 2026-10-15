@@ -86,7 +86,7 @@ final class OfflineBrowserDelegate: NSObject, WKNavigationDelegate, WKScriptMess
         }
         decisionHandler(.cancel)
         if let path=OfflineURL.localWikipediaPath(url) { model?.navigate(path) }
-        else { model?.message="External link blocked. Reading in Atlas stays offline." }
+        else { model?.message="External link blocked. Reading in Sematrica stays offline." }
     }
     func webView(_ webView: WKWebView,didStartProvisionalNavigation navigation: WKNavigation!) {
         model?.crawler.navigationStarted()
@@ -94,7 +94,7 @@ final class OfflineBrowserDelegate: NSObject, WKNavigationDelegate, WKScriptMess
     }
     func webView(_ webView: WKWebView,didFinish navigation: WKNavigation!) {
         Task { [weak model] in await model?.crawler.prepare();model?.identifyCitation() }
-        model?.loading=false; model?.title=webView.title ?? "Wikipedia"
+        model?.loading=false; model?.title=webView.title ?? "Article"
         model?.canGoBack=webView.canGoBack; model?.canGoForward=webView.canGoForward
         // The isolated client world is the future geometry bridge. Archive scripts are disabled.
         webView.evaluateJavaScript("""

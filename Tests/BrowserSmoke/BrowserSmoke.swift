@@ -32,21 +32,8 @@ struct BrowserSmoke {
         try await web.evaluateJavaScript(script,in:nil,contentWorld:.defaultClient)
     }
     static func run() async throws {
-        let emptyBrowser=BrowserModel()
-        let emptyChat=emptyBrowser.crawler.conversation
-        emptyBrowser.crawler.intelligence.provider=NoArticleChatProvider()
-        emptyBrowser.crawler.intelligence.model="test"
-        for greeting in ["hello","hi","Can we talk about music?"] {
-            emptyChat.talk(greeting)
-            try await waitUntil {!emptyChat.companionBusy}
-            try require(emptyChat.lines.last?.text == "Hello! We can talk without an article open.","Empty-page chat incorrectly required a tool decision")
-            try require(!emptyBrowser.crawler.active,"Ordinary chat started the crawler")
-        }
-        try require(emptyChat.companionTitle == "No article open","Empty-page header claims an article is open")
-        print("NO-ARTICLE APP CHAT PASSED: hello, hi, follow-up, no tool planner or crawler spawn")
-        try await exerciseStandaloneCompanion()
-        try await exerciseEmbodiedSelection()
-        try await exerciseStatisticsTool()
+        try await exerciseNoArticleChat()
+        try await exerciseCompanion()
         if ProcessInfo.processInfo.environment["ATLAS_COMPANION_ONLY"] == "1" {return}
         let root=URL(fileURLWithPath:"/tmp/AtlasStage2LiveLibrary")
         let metadata=try LibraryLayout().establish(at:root)
@@ -56,6 +43,7 @@ struct BrowserSmoke {
         try await model.open(record:record,access:access)
         let web=try model.webView.unwrap()
         let window=NSWindow(contentRect:NSRect(x:0,y:0,width:1100,height:760),styleMask:[.titled,.resizable],backing:.buffered,defer:false)
+        retainedWindows.append(window)
         let surface=CrawlerSurface(webView:web,crawler:model.crawler)
         window.contentView=surface;window.orderFront(nil)
         try await waitUntil { web.url != nil && !web.isLoading }
@@ -86,226 +74,140 @@ struct BrowserSmoke {
         try require(web.url == current,"External navigation escaped the offline policy")
         print("WebKit: article, loaded image, \(styles) stylesheets, TOC, clicked link, Back, Forward, external block verified")
         if ProcessInfo.processInfo.environment["ATLAS_COMMAND_ONLY"] != "1" {try await exerciseCrawler(model:model,web:web,surface:surface,window:window,results:results)}
-        try await exerciseCommands(model:model,web:web)
-        model.close(); window.close()
+        try await exerciseLiveCompanion(model:model,web:web,results:results)
+        model.close()
     }
-    static func exerciseStandaloneCompanion() async throws {
+
+    /// Ordinary chat works with no article open and never starts the spider.
+    static func exerciseNoArticleChat() async throws {
+        let browser=BrowserModel()
+        let chat=browser.crawler.conversation
+        browser.crawler.intelligence.provider=ScriptedPlans(["hello":#"{"steps":[],"reply":"Hello! We can talk without an article open."}"#])
+        browser.crawler.intelligence.model="test"
+        chat.send("hello")
+        try await waitUntil {!chat.busy}
+        try require(chat.lines.last?.text == "Hello! We can talk without an article open.","No-article chat failed: \(chat.lines.last?.text ?? "")")
+        try require(!browser.crawler.active,"Ordinary chat started the crawler")
+        try require(chat.companionTitle == "No article open","Empty-page header claims an article is open")
+        print("NO-ARTICLE CHAT PASSED")
+    }
+
+    static let fixtureHTML="""
+    <html><body><article>
+    <h1>Fixture</h1>
+    <p>A yellow bird sat on a narrow branch near a new house. Anchor after anchor, the bird sang. The extraordinary singer was famous.</p>
+    <h2>History</h2>
+    <p>A tall green tree grows beside the forest. Another tiny insect watches. <a href="#x">A link</a> and <a href="#y">another link</a>.</p>
+    </article></body></html>
+    """
+
+    /// The companion on a fixture page: local requests run without a model,
+    /// highlights are exact and survive reflow, the spider walks to targets.
+    static func exerciseCompanion() async throws {
         let browser=BrowserModel()
         browser.title="Fixture article"
         let web=WKWebView(frame:NSRect(x:0,y:0,width:960,height:700))
         let window=NSWindow(contentRect:NSRect(x:0,y:0,width:960,height:700),styleMask:[.titled,.resizable],backing:.buffered,defer:false)
         retainedWindows.append(window)
-        window.contentView=web;window.orderFront(nil)
+        let surface=CrawlerSurface(webView:web,crawler:browser.crawler)
+        window.contentView=surface;window.orderFront(nil)
         browser.webView=web;browser.crawler.attach(web)
-        web.loadHTMLString("<html><body><article><p>The beautiful red bird sings sweet songs.</p><h2>History</h2><p>A tall green tree grows beside the extraordinary forest.</p></article></body></html>",baseURL:nil)
-        try await waitUntil {(try? await js(web,"document.body?.innerText.includes('beautiful')") as? Bool) == true}
-        print("STANDALONE ARTICLE LOADED")
+        web.loadHTMLString(fixtureHTML,baseURL:nil)
+        try await waitUntil {(try? await js(web,"document.body?.innerText.includes('extraordinary')") as? Bool) == true}
         await browser.crawler.prepare()
-        try require(browser.crawler.ready,"Standalone article geometry was unavailable")
-        print("STANDALONE GEOMETRY READY")
+        try require(browser.crawler.ready,"Fixture geometry was unavailable")
         let crawler=browser.crawler,chat=crawler.conversation
         crawler.autoFollow=false
-        crawler.intelligence.provider=CompanionFixtureProvider();crawler.intelligence.model="test-companion"
-        chat.talk("How many adjectives are in this article?")
-        try await waitUntil {!chat.companionBusy}
-        print("STANDALONE COUNT: ",chat.lines.last?.text ?? "none")
-        let adjectives=try chat.companionResults.last.unwrap()
-        try require(adjectives.count>0 && adjectives.title == "adjectives","Standalone adjective count failed: \(chat.lines.last?.text ?? "")")
-        chat.talk("Create a sentence using all these adjectives.")
-        try await waitUntil {!chat.companionBusy}
-        print("STANDALONE COMPOSITION: ",chat.lines.last?.text ?? "none")
-        let sentence=chat.lines.last?.text.lowercased() ?? ""
-        try require(Set(adjectives.ranges.map {$0.text.lowercased()}).allSatisfy {sentence.contains($0)},"Creative reply did not receive focused adjective words")
-        try require(chat.companionFocus == adjectives.id,"Creative reply replaced the adjective finding")
-        chat.talk("What's the second longest word here?")
-        try await waitUntil {!chat.companionBusy}
-        print("STANDALONE RANK: ",chat.lines.last?.text ?? "none")
-        let ranked=try chat.companionResults.last.unwrap()
-        try require(ranked.title == "Word ranked 2 by length" && ranked.count == 1 && ranked.id != adjectives.id,"Fresh word ranking reused the adjective result: \(chat.lines.last?.text ?? "")")
-        chat.talk("What do you think of this article?")
-        try await waitUntil {!chat.companionBusy}
-        print("STANDALONE OPINION: ",chat.lines.last?.text ?? "none")
-        let evidence=try chat.companionResults.last.unwrap()
-        try require(evidence.title == "Supporting passages" && evidence.id != ranked.id,"Natural article reply did not save supporting passages")
-        chat.talk("Prove it.")
-        try await waitUntil {for _ in 0..<6 {crawler.tick(dt:0.03)};return !chat.companionBusy && !chat.companionTouring}
-        print("STANDALONE PROOF: ",chat.lines.last?.text ?? "none")
-        let shown=try await js(web,"[...(CSS.highlights.get('atlas-page')||[])].map(r=>r.toString()).join('')") as? String ?? ""
-        try require(shown.contains("bird sings"),"Proof did not show the current article evidence")
-        if ProcessInfo.processInfo.environment["ATLAS_COMPANION_LIVE"] == "1" {
-            chat.lines=[];chat.companionResults=[adjectives];chat.companionFocus=adjectives.id
-            crawler.debug=true
-            crawler.intelligence.provider=OllamaProvider();crawler.intelligence.model="llama3.1:latest"
-            chat.talk("Create a sentence using all these adjectives.")
-            try await waitUntil(attempts:1800) {!chat.companionBusy}
-            let liveSentence=chat.lines.last?.text.lowercased() ?? ""
-            print("LIVE COMPOSITION:",liveSentence)
-            try require(Set(adjectives.ranges.map {$0.text.lowercased()}).allSatisfy {liveSentence.contains($0)},"Local model omitted saved adjective words in creative reply")
-            try require(chat.companionFocus == adjectives.id,"Local router did not preserve the finding used for creative writing")
-            chat.talk("What's the second longest word here?")
-            try await waitUntil(attempts:1800) {!chat.companionBusy}
-            print("LIVE RANK:",chat.lines.last?.text ?? "none")
-            try require(chat.companionResults.last?.title == "Word ranked 2 by length" && chat.companionResults.last?.ranges.first?.text == "beautiful","Live router or planner returned the wrong whole-page word rank")
-            print("LIVE COMPANION PASSED: natural composition and fresh ordinal ranking with llama3.1")
+        crawler.intelligence.model=""   // Local requests must not need a model.
+        func ask(_ text:String) async throws {
+            chat.send(text)
+            try await waitUntil(attempts:600) {for _ in 0..<4 {crawler.tick(dt:0.03)};return !chat.busy}
         }
-        crawler.stop();browser.close();window.orderOut(nil)
-        print("STANDALONE COMPANION PASSED: exact rank after adjectives, natural composition, grounded opinion, requested proof")
-    }
-    /// Exercises the actual WebKit text map, model decision, restricted feet,
-    /// movement, and CSS highlight without requiring an installed ZIM fixture.
-    static func exerciseEmbodiedSelection() async throws {
-        let browser=BrowserModel()
-        browser.title="Embodied fixture"
-        let web=WKWebView(frame:NSRect(x:0,y:0,width:960,height:700))
-        let window=NSWindow(contentRect:NSRect(x:0,y:0,width:960,height:700),styleMask:[.titled,.resizable],backing:.buffered,defer:false)
-        retainedWindows.append(window)
-        let crawler=browser.crawler,chat=crawler.conversation
-        window.contentView=CrawlerSurface(webView:web,crawler:crawler);window.orderFront(nil)
-        browser.webView=web;crawler.attach(web);crawler.autoFollow=false
-        crawler.intelligence.provider=EmbodiedFixtureProvider();crawler.intelligence.model="test-embodied"
-        let linkedWords=Array(repeating:"Cats chase mice. Dogs chase birds. Ants carry crumbs. Bees visit flowers. Crows gather twigs. Bears catch fish.",count:5).joined(separator:" ")
-        web.loadHTMLString("<html><body><article style='margin:24px;width:820px;font:18px/28px Helvetica'><p>\(linkedWords) Hippopotamuses gather.</p></article></body></html>",baseURL:nil)
-        try await waitUntil {(try? await js(web,"document.body?.innerText.includes('Hippopotamuses')") as? Bool) == true}
-        await crawler.prepare();try require(crawler.ready,"Embodied fixture has no document geometry")
-        let page=try JSONDecoder().decode(CrawlerPageMap.self,from:JSONSerialization.data(withJSONObject:try await js(web,"window.atlasTerrain.pageMap()") as Any))
-        let longest=try CrawlerPageAnalysis.select(page,unit:"word",order:"longest").unwrap()
-        let first=try CrawlerPageAnalysis.select(page,unit:"word",order:"first").unwrap()
-        try require(longest.text.lowercased() == "hippopotamuses" && first.text == "Cats","Synthetic page word order is not stable")
-
-        // Put the body on a real permitted foothold, then ask for the far target.
-        let allowed=CrawlerPageAnalysis.ranges(page,unit:.word,footholds:["noun","verb"])
-        let allowedJSON=String(data:try JSONEncoder().encode(allowed),encoding:.utf8)!
-        let targets=try JSONDecoder().decode([CrawlerPageTarget].self,from:JSONSerialization.data(withJSONObject:try await js(web,"window.atlasTerrain.pageResolve(JSON.parse(\(quoted(allowedJSON))),\(page.revision))") as Any))
-        let start=try targets.first.unwrap().rect.center
-        crawler.start(hunt:false);crawler.guide(to:start)
-        try await waitUntil {for _ in 0..<6 {crawler.tick(dt:0.03)};return crawler.agent.state.position.distance(to:start)<11}
-        let before=crawler.agent.state.position
-        chat.talk("Go to the longest word in this article but do so only stepping on nouns or verbs")
-        var sawRestrictedFeet=false
-        try await waitUntil(attempts:1600) {
-            if let permitted=crawler.pageFootholds {
-                sawRestrictedFeet=true
-                try require(crawler.legs.legs.allSatisfy {leg in permitted.contains {$0.position == leg.to}},"Restricted movement planted a foot away from noun/verb source text")
-            }
-            for _ in 0..<6 {crawler.tick(dt:0.03)}
-            return !chat.companionBusy && !chat.companionTouring
-        }
-        let longestMark=try await js(web,"[...(CSS.highlights.get('atlas-page')||[])].map(r=>r.toString()).join('')") as? String ?? ""
-        try require(sawRestrictedFeet,"The companion ignored the noun/verb-only foothold constraint")
-        try require(longestMark.lowercased() == longest.text.lowercased(),"The restricted tour failed to highlight its measured destination: \(chat.lines.last?.text ?? "")")
-        try require(crawler.agent.state.position.distance(to:before)>40,"The crawler highlighted a distant word without moving to it")
-        let longestCenter=try await resolvedCenter(longest,page:page,web:web)
-        try require(crawler.agent.state.position.distance(to:longestCenter)<15,"The crawler did not reach the longest word")
-        try require(crawler.pageFootholds == nil,"The completed tour left its noun/verb-only foot rule active")
-
-        let afterLongest=crawler.agent.state.position
-        chat.talk("Go to the first word of this article?")
-        try await waitUntil(attempts:1600) {for _ in 0..<6 {crawler.tick(dt:0.03)};return !chat.companionBusy && !chat.companionTouring}
-        let firstMark=try await js(web,"[...(CSS.highlights.get('atlas-page')||[])].map(r=>r.toString()).join('')") as? String ?? ""
-        try require(firstMark == first.text,"A request for the first word reused the old longest-word finding: \(chat.lines.last?.text ?? "")")
-        try require(crawler.agent.state.position.distance(to:afterLongest)>40,"The crawler did not return to the first word")
-        try require(crawler.pageFootholds == nil,"A fresh unrestricted request inherited the old foothold rule")
-        print("EMBODIED SELECTION PASSED: restricted longest-word journey, exact highlight, fresh first-word journey")
-
-        if ProcessInfo.processInfo.environment["ATLAS_EMBODIED_LIVE"] == "1" {
-            chat.lines=[];chat.companionResults=[];chat.companionFocus=nil
-            crawler.intelligence.provider=OllamaProvider();crawler.intelligence.model="llama3.1:latest"
-            chat.talk("Go to the longest word in this article but do so only stepping on nouns or verbs")
-            try await waitUntil(attempts:1800) {for _ in 0..<6 {crawler.tick(dt:0.03)};return !chat.companionBusy && !chat.companionTouring}
-            let liveLongest=try await js(web,"[...(CSS.highlights.get('atlas-page')||[])].map(r=>r.toString()).join('')") as? String ?? ""
-            try require(liveLongest.lowercased() == longest.text.lowercased(),"llama3.1 failed to plan or execute the constrained destination: \(chat.lines.last?.text ?? "")")
-            chat.talk("Go to the first word of this article?")
-            try await waitUntil(attempts:1800) {for _ in 0..<6 {crawler.tick(dt:0.03)};return !chat.companionBusy && !chat.companionTouring}
-            let liveFirst=try await js(web,"[...(CSS.highlights.get('atlas-page')||[])].map(r=>r.toString()).join('')") as? String ?? ""
-            try require(liveFirst == first.text,"llama3.1 treated the first-word request as the previous longest-word request: \(chat.lines.last?.text ?? "")")
-            print("LIVE EMBODIED COMPANION PASSED: llama3.1 planned both commands through the real page tools")
-            crawler.intelligence.provider=EmbodiedFixtureProvider();crawler.intelligence.model="test-embodied"
+        func painted(_ layer:String) async throws -> [String] {
+            try await js(web,"[0,1,2,3,4,5,6,7,8,9,10,11].flatMap(i=>[...(CSS.highlights.get('atlas-\(layer)-'+i)||[])].map(r=>r.toString()))") as? [String] ?? []
         }
 
-        // The same request must fail honestly when eligible words are separated by
-        // a gap wider than the crawler's connected foothold reach.
-        crawler.stop()
-        web.loadHTMLString("<html><body data-fixture='sparse'><article style='margin:24px;font:18px/28px Helvetica'><p>Cats chase mice.</p><p style='margin-top:550px'>Hippopotamuses gather.</p></article></body></html>",baseURL:nil)
-        try await waitUntil {
-            if web.isLoading {return false}
-            return (try? await js(web,"document.body?.dataset.fixture === 'sparse'") as? Bool) == true
-        }
-        await crawler.prepare();try require(crawler.ready,"Sparse fixture has no document geometry")
-        let sparse=try JSONDecoder().decode(CrawlerPageMap.self,from:JSONSerialization.data(withJSONObject:try await js(web,"window.atlasTerrain.pageMap()") as Any))
-        let sparseWords=CrawlerPageAnalysis.ranges(sparse,unit:.word,footholds:["noun","verb"])
-        let sparseJSON=String(data:try JSONEncoder().encode(sparseWords),encoding:.utf8)!
-        let sparseTargets=try JSONDecoder().decode([CrawlerPageTarget].self,from:JSONSerialization.data(withJSONObject:try await js(web,"window.atlasTerrain.pageResolve(JSON.parse(\(quoted(sparseJSON))),\(sparse.revision))") as Any))
-        let sparseStart=try sparseTargets.first.unwrap().rect.center
-        crawler.start(hunt:false);crawler.guide(to:sparseStart)
-        try await waitUntil {for _ in 0..<6 {crawler.tick(dt:0.03)};return crawler.agent.state.position.distance(to:sparseStart)<11}
-        chat.talk("Go to the longest word in this article but do so only stepping on nouns or verbs")
-        try await waitUntil(attempts:500) {for _ in 0..<6 {crawler.tick(dt:0.03)};return !chat.companionBusy && !chat.companionTouring}
-        let failure=chat.lines.last?.text.lowercased() ?? ""
-        let sparseMark=try await js(web,"CSS.highlights.get('atlas-page')?.size || 0") as? Int ?? 0
-        try require(failure.contains("no connected route") && failure.contains("haven't relaxed"),"Disconnected noun/verb footholds did not produce an honest route failure: \(failure)")
-        try require(sparseMark == 0,"The crawler highlighted an unreachable word")
-        print("EMBODIED ROUTE FAILURE PASSED: no silent constraint relaxation or unreachable highlight")
+        try await ask("how many periods are in this article")
+        try require(chat.lines.last?.text.hasPrefix("There are 6 periods") == true,"Period count: \(chat.lines.last?.text ?? "")")
+        try require(!crawler.active,"Counting moved the spider")
+
+        try await ask("find all adjectives that end with w and highlight them in green")
+        let green=try await painted("l1")
+        try require(Set(green) == ["yellow","narrow","new"],"Green adjectives: \(green)")
+        try require(chat.layers.first?.style.colors == ["#008000"],"Layer color was not green")
+        try require(crawler.active,"Highlighting did not use the spider")
+
+        try await ask("find me all the words that start with a and ends with r")
+        let words=try await painted("l2")
+        try require(words == ["Anchor","after","anchor","Another","another"],"a…r words: \(words)")
+
+        try await ask("highlight the verbs half green half yellow")
+        try require(chat.layers.count == 3 && chat.layers.last?.style.mode == .split,"Split layer missing")
+
+        // A reflow must not erase highlights or break the next walk.
+        window.setContentSize(NSSize(width:720,height:700))
+        try await Task.sleep(for:.milliseconds(400))
+        try require(try await painted("l1").count == 3,"Highlights vanished after a reflow")
+
+        try await ask("go to the longest word")
+        let rect=try await js(web,"(()=>{const w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);let n;while(n=w.nextNode()){const i=n.data.indexOf('extraordinary');if(i>=0){const r=document.createRange();r.setStart(n,i);r.setEnd(n,i+13);const b=r.getBoundingClientRect();return [b.left+scrollX+b.width/2,b.top+scrollY+b.height/2];}}})()") as? [Double] ?? []
+        try require(rect.count == 2 && crawler.agent.state.position.distance(to:.init(x:rect[0],y:rect[1]))<20,"Spider did not reach the longest word")
+
+        try await ask("take me to the History section")
+        try require(chat.lines.last?.trail.contains("arrived") == true,"Go to section did not arrive")
+
+        try await ask("clear highlights")
+        try require(chat.layers.isEmpty,"Clear left layers behind")
+        try require(try await painted("l1").isEmpty,"Clear left highlights on the page")
+
+        // The model path: one schema-constrained call, then the same execution.
+        crawler.intelligence.provider=ScriptedPlans([
+            "paint words about trees in blue":#"{"steps":[{"action":"highlight","query":{"unit":"word","meaning":"related to trees"},"color":"blue"}],"reply":"Blue for trees."}"#,
+            "Which words are related to trees?":#"{"matches":[]}"#
+        ],judge:["tree","forest","branch"])
+        crawler.intelligence.model="fixture"
+        try await ask("paint words about trees in blue")
+        let trees=try await painted("l5")
+        try require(Set(trees) == ["tree","forest","branch"],"Semantic highlight: \(trees)")
+        try require(chat.lines.contains {$0.text == "Blue for trees."},"Model reply missing")
+
+        try await ask("stop")
+        try require(crawler.status == .idle || crawler.status == .paused,"Stop did not stop the spider")
+        print("COMPANION PASSED: local counts and highlights, exact layers, reflow, walking, sections, clear, model plan with semantic judgment")
         crawler.stop();browser.close();window.orderOut(nil)
     }
-    /// Checks exact article statistics through the real rendered-page bridge.
-    /// The fixture classifier intentionally says CHAT: an exact count must still
-    /// reach the measurement tool, and the reply must disclose that choice.
-    static func exerciseStatisticsTool() async throws {
-        let browser=BrowserModel()
-        browser.title="Letter-count fixture"
-        let web=WKWebView(frame:NSRect(x:0,y:0,width:900,height:650))
-        let window=NSWindow(contentRect:NSRect(x:0,y:0,width:900,height:650),styleMask:[.titled,.resizable],backing:.buffered,defer:false)
-        retainedWindows.append(window)
-        let crawler=browser.crawler,chat=crawler.conversation
-        window.contentView=CrawlerSurface(webView:web,crawler:crawler);window.orderFront(nil)
-        browser.webView=web;crawler.attach(web);crawler.autoFollow=false
-        crawler.intelligence.provider=StatisticsFixtureProvider();crawler.intelligence.model="test-statistics"
-        web.loadHTMLString("<html><body><article><p>Abé Ω字 123!? &amp; X-ray.</p><p><em>façade</em> — ٤٢, NASA. Cafe\u{301}.</p><span style='display:none'>Hiddenletters</span></article></body></html>",baseURL:nil)
-        try await waitUntil {(try? await js(web,"document.querySelector('article')?.innerText.includes('NASA')") as? Bool) == true}
-        await crawler.prepare();try require(crawler.ready,"Statistics fixture has no document geometry")
-        let page=try JSONDecoder().decode(CrawlerPageMap.self,from:JSONSerialization.data(withJSONObject:try await js(web,"window.atlasTerrain.pageMap()") as Any))
-        try require(!page.truncated && page.blocks.map(\.text).joined().contains("Cafe\u{301}"),"Statistics fixture text is incomplete or normalized unexpectedly")
-        let before=crawler.agent.state.position
-        chat.talk("how many letters in this article (exluding numbers and non-letter characters")
-        try await waitUntil {!chat.companionBusy}
-        let answer=chat.lines.last?.text.lowercased() ?? ""
-        try require(answer.contains("23") && answer.contains("letter"),"Exact letter-count request did not use the page measurement: \(answer)")
-        try require(!crawler.active && crawler.agent.state.position == before,"A count request moved the crawler")
-        try require((try await js(web,"CSS.highlights.get('atlas-page')?.size || 0") as? Int ?? 0) == 0,"A count request highlighted article text")
-        let activities=try chat.lines.last.unwrap().toolActivity
-        try require(Set(activities.map(\.id)) == ["model","page","measure","words","links","crawler"],"Reply omitted a tool from the visible catalog")
-        for id in ["model","page","measure"] {
-            guard let item=activities.first(where:{$0.id == id}) else {throw Failure.check("Missing tool activity: \(id)")}
-            if case .used=item.state {} else {throw Failure.check("Expected \(id) to be marked used")}
-        }
-        for id in ["words","links","crawler"] {
-            guard let item=activities.first(where:{$0.id == id}) else {throw Failure.check("Missing tool activity: \(id)")}
-            if case .idle=item.state {} else {throw Failure.check("Expected \(id) to be marked not used")}
-        }
 
-        chat.talk("How many digits are in this article?")
-        try await waitUntil {!chat.companionBusy}
-        let digitAnswer=chat.lines.last?.text.lowercased() ?? ""
-        try require(digitAnswer.contains("5") && digitAnswer.contains("digit"),"A new count reused the prior letters result: \(digitAnswer)")
-        try require(!crawler.active,"Switching measurement units moved the crawler")
+    /// The companion on the real offline article: sections, links, navigation and hunts.
+    static func exerciseLiveCompanion(model:BrowserModel,web:WKWebView,results:[SearchResult]) async throws {
+        let crawler=model.crawler,chat=crawler.conversation
+        let main=try results.first {$0.title == "Ray Charles"}.unwrap();model.select(main)
+        try await waitUntil {crawler.ready && !web.isLoading}
+        crawler.autoFollow=true
+        crawler.intelligence.model=""
+        func ask(_ text:String) async throws {
+            chat.send(text)
+            try await waitUntil(attempts:900) {for _ in 0..<4 {crawler.tick(dt:0.03)};return !chat.busy}
+        }
+        try await ask("how many links are on this page")
+        try require(chat.lines.last?.text.hasPrefix("There are") == true,"Link count failed: \(chat.lines.last?.text ?? "")")
+        try await ask("highlight the nouns in the introduction in light blue")
+        try require(chat.layers.count == 1,"Introduction nouns were not highlighted")
+        try await ask("go to the bottom")
+        try require(crawler.agent.state.position.y>1000,"Spider did not walk to the bottom")
+        try await ask("go to the top")
+        try require(crawler.agent.state.position.y<400,"Spider did not walk back to the top")
+        let before=web.url
+        let other=try results.first {$0.title != "Ray Charles"}.unwrap().title
+        let request="open the article about \(other)"
+        crawler.intelligence.provider=ScriptedPlans([request:#"{"steps":[{"action":"open","title":"\#(other)"}],"reply":"Opening it."}"#])
+        crawler.intelligence.model="fixture"
+        try await ask(request)
+        try require(web.url != before && crawler.ready,"Open article did not navigate")
+        try await ask("go back")
+        try require(web.url == before,"Back did not return")
+        print("LIVE COMPANION PASSED: counts, section highlights, long walks, open, back")
+    }
 
-        // A partial text map must not produce an apparently exact answer.
-        _ = try await js(web,"window.__atlasOriginalPageMap=window.atlasTerrain.pageMap;window.atlasTerrain.pageMap=()=>({...window.__atlasOriginalPageMap(),textTruncated:true,truncated:true})")
-        chat.talk("how many letters in this article (exluding numbers and non-letter characters")
-        try await waitUntil {!chat.companionBusy}
-        let incomplete=chat.lines.last?.text.lowercased() ?? ""
-        try require(incomplete.contains("partial") || incomplete.contains("complete-map") || incomplete.contains("incomplete"),"Partial page text was reported as an exact count: \(incomplete)")
-        guard let failedMeasure=chat.lines.last?.toolActivity.first(where:{$0.id == "measure"}) else {throw Failure.check("Partial-map reply omitted text statistics activity")}
-        if case .failed=failedMeasure.state {} else {throw Failure.check("A partial article count did not mark text statistics as failed")}
-        try require(!crawler.active,"A failed exact count moved the crawler")
-        print("ARTICLE STATISTICS PASSED: Unicode letters only, explicit tool-use trace, no movement, incomplete-map refusal")
-        crawler.stop();browser.close();window.orderOut(nil)
-    }
-    static func resolvedCenter(_ range:CrawlerPageRange,page:CrawlerPageMap,web:WKWebView) async throws -> DocumentPosition {
-        let encoded=String(data:try JSONEncoder().encode([range]),encoding:.utf8)!
-        let result=try JSONDecoder().decode([CrawlerPageTarget].self,from:JSONSerialization.data(withJSONObject:try await js(web,"window.atlasTerrain.pageResolve(JSON.parse(\(quoted(encoded))),\(page.revision))") as Any))
-        return try result.first.unwrap().rect.center
-    }
     static func exerciseCrawler(model:BrowserModel,web:WKWebView,surface:CrawlerSurface,window:NSWindow,results:[SearchResult]) async throws {
         for article in results.prefix(3) {
             model.select(article)
@@ -404,362 +306,32 @@ struct BrowserSmoke {
         crawler.stop()
         print("CRAWLER HUNT PASSED: \(crawler.target), observations=\(huntObservations); screenshot /tmp/atlas-phase3-crawler.png")
     }
-    static func exerciseCommands(model:BrowserModel,web:WKWebView) async throws {
-        let crawler=model.crawler,chat=crawler.conversation
-        crawler.autoFollow=false;crawler.start(hunt:false)
-        try await Task.sleep(for:.milliseconds(800))
-        chat.send("move slowly");try require(chat.speed == 135,"Slow command failed")
-        chat.send("move faster");try require(chat.speed == 202.5,"Fast command failed")
-        chat.send("normal speed")
-        chat.send("pause");let position=crawler.agent.state.position
-        for _ in 0..<20 {crawler.tick(dt:0.05)}
-        try require(crawler.agent.state.position == position && crawler.status == .paused,"Pause command did not hold")
-        chat.send("go right")
-        for _ in 0..<100 {
-            try await crawler.refreshPerception();for _ in 0..<6 {crawler.tick(dt:0.05)}
-            if crawler.status == .paused {break}
-        }
-        try require(crawler.status == .paused && crawler.agent.state.position.x>position.x+40,"Direction command failed to arrive and wait")
-        chat.send("stay in this article");try require(!chat.rules.allowLinks,"Stay rule failed")
-        chat.send("avoid United States");try require(!chat.rules.permits("United_States"),"Avoid rule failed")
-        chat.send("resume")
-        chat.send("highlight adjectives")
-        for _ in 0..<100 {
-            try await crawler.refreshPerception();for _ in 0..<12 {crawler.tick(dt:0.05)}
-            if chat.highlightedWords>0 {break}
-            try await Task.sleep(for:.milliseconds(80))
-        }
-        let marked=try await js(web,"[...(CSS.highlights.get('atlas-words')||[])].map(r=>r.toString()).join(', ')") as? String ?? ""
-        try require(chat.highlightedWords>0 && !marked.isEmpty,"No locally classified words were highlighted")
-        chat.send("clear highlights");try await Task.sleep(for:.milliseconds(100))
-        let count=try await js(web,"CSS.highlights.get('atlas-words')?.size || 0") as? Int ?? 0
-        try require(count == 0 && chat.wordKind == nil,"Clear highlights failed")
-        let originalProvider=crawler.intelligence.provider,originalModel=crawler.intelligence.model
-        crawler.intelligence.provider=DelayedCommandProvider();crawler.intelligence.model="test"
-        chat.send("Could you gently shift eastwards?")
-        try require(chat.interpreting,"Natural-language interpretation did not start")
-        chat.send("stop");try require(!crawler.active,"Stop command was not immediate")
-        try await Task.sleep(for:.milliseconds(600))
-        try require(chat.proposed == nil && !crawler.active,"A stale model response revived the crawler")
-        crawler.intelligence.provider=WordSelectionProvider();crawler.intelligence.model="word-test"
-        crawler.start(hunt:false);crawler.autoFollow=false
-        chat.send("highlight words starting with A")
-        try require(chat.wordKind?.lowercased() == "prefix:a","Prefix rule did not activate")
-        chat.send("highlight words of French origin")
-        try require(chat.wordKind == "AI suggestions: words of French origin","AI criterion did not activate")
-        for _ in 0..<100 {
-            try await crawler.refreshPerception()
-            for _ in 0..<10 {crawler.tick(dt:0.05)}
-            if chat.evaluatingWords {break}
-            try await Task.sleep(for:.milliseconds(50))
-        }
-        try require(chat.evaluatingWords,"AI word evaluation did not start")
-        try await waitUntil {!chat.evaluatingWords}
-        try require(chat.highlightedWords>0,"AI selection did not highlight an observed range")
-        chat.send("clear highlights")
-        chat.send("highlight words of French origin")
-        try await crawler.refreshPerception()
-        try require(chat.evaluatingWords,"Second AI batch did not start")
-        chat.send("stop")
-        try await Task.sleep(for:.milliseconds(700))
-        let lateMarks=try await js(web,"CSS.highlights.get('atlas-words')?.size || 0") as? Int ?? 0
-        try require(!crawler.active && !chat.evaluatingWords && lateMarks == 0,"Stopped AI batch applied stale highlights")
-        print("AI WORD RULES PASSED: prefix mode, bounded model selection, delayed-result cancellation")
-        crawler.intelligence.provider=PlanReplyProvider(reply:#"{"actions":[{"action":"stay"},{"action":"slower"}],"words":{"partOfSpeech":"verbs","prefix":"s"},"avoidSections":["References"],"explore":false}"#)
-        crawler.intelligence.model="planner-test"
-        chat.send("Please find action words beginning with S, skip references, and remain here")
-        try await waitUntil {!chat.interpreting}
-        try require(chat.wordRule == CrawlerWordRule(partOfSpeech:"verbs",prefix:"s") && !chat.rules.allowLinks && chat.excludedSections == ["References"],"Structured planner lost a constraint")
-        try require(crawler.active,"A word plan did not start the crawler")
-        let excluded=CrawlerTerrain(id:"excluded",group:"refs",order:0,kind:.link,rect:.init(x:0,y:0,width:50,height:20),text:"Ray Charles",href:"A/Ray_Charles",section:"Article › References")
-        try require(!chat.permitsSection(excluded),"Excluded section allowed a remembered link")
-        let forbidden=try await crawler.intelligence.followPlanLink(excluded,excluding:[],expectedGeneration:chat.executionID)
-        try require(!forbidden,"Excluded section link was followed")
-
-        let beforeStay=web.url
-        await chat.exploreNext()
-        try require(web.url == beforeStay,"Stay restriction allowed exploration")
-        let previousRule=chat.wordRule
-        chat.send("find semantic hunt")
-        try require(chat.wordRule == previousRule && chat.lines.last?.text.contains("What should I look for") == true,"Ambiguous semantic request did not clarify while retaining the rule")
-        chat.execute(.init(actions:[.init("allowLinks")],words:.init(prefix:"zzzz"),avoidSections:["References"],searchQuery:"Ray Charles",explore:true))
-        try await waitUntil(attempts:700) {crawler.ready && !web.isLoading && web.url != beforeStay}
-        try require(chat.wordRule?.prefix == "zzzz" && chat.excludedSections == ["References"],"Word plan was lost across an autonomous article transition")
-        try await crawler.refreshPerception()
-        try require(crawler.agent.observation?.terrain.allSatisfy {$0.text.isEmpty || $0.section != nil} == true,"Section metadata missing from text terrain")
-        let stale=chat.executionID,stoppedURL=web.url
-        chat.send("stop")
-        let rejected=try await crawler.intelligence.followPlanArticle("A/Ray_Charles",expectedGeneration:stale)
-        try require(!rejected && web.url == stoppedURL,"Stale plan could navigate after Stop")
-        print("INTENT LOOP PASSED: compound plan, auto-start, clarification, travel restriction, automatic offline search after stalled progress, preserved rule, stale navigation rejection")
-        crawler.intelligence.provider=originalProvider;crawler.intelligence.model=originalModel
-        if ProcessInfo.processInfo.environment["ATLAS_RUN_COMMAND_AI"] == "1" {
-            crawler.intelligence.provider=RecordingWordProvider(base:originalProvider)
-            crawler.intelligence.model="llama3.1:latest"
-            let initialSpeed=chat.speed
-            chat.send("Please crawl at a much gentler pace.")
-            try await waitUntil(attempts:1200) {!chat.interpreting}
-            try require(chat.speed<initialSpeed,"Local model did not execute the slower instruction")
-            chat.send("Please highlight every word beginning with the letter A")
-            try await waitUntil(attempts:1200) {!chat.interpreting}
-            try require(chat.wordRule?.prefix?.lowercased() == "a","Local model did not execute a word-prefix plan")
-            crawler.start(hunt:false)
-            chat.send("highlight words of French origin")
-            for _ in 0..<100 {
-                try await crawler.refreshPerception()
-                for _ in 0..<10 {crawler.tick(dt:0.05)}
-                if chat.evaluatingWords {break}
-                try await Task.sleep(for:.milliseconds(50))
-            }
-            try require(chat.evaluatingWords,"Real model word evaluation did not start")
-            try await waitUntil(attempts:1200) {!chat.evaluatingWords}
-            try require(chat.wordEvaluationNote.hasPrefix("AI suggestions · llama3.1:latest"),"Real model failed word-selection JSON: \(chat.wordEvaluationNote)")
-            chat.send("stop")
-            crawler.intelligence.model=originalModel
-            print("REAL LOCAL COMMAND INTERPRETER AND WORD SELECTION PASSED")
-        }
-
-        crawler.stop()
-        _ = try await js(web,"document.body.innerHTML = '<main style=\"padding:40px;width:700px\"><p>A small cat runs. The extraordinary creature walks confidently beside <b>pneumonoultramicroscopicsilicovolcanoconiosis</b> in this deliberately longer sentence.</p><p><a href=\"One\">First</a> <a href=\"Two\">Second</a> <a href=\"One\">Repeated</a></p><img alt=\"Test diagram\" width=\"80\" height=\"60\"></main>'; window.scrollTo(0,0)")
-        try await Task.sleep(for:.milliseconds(600))
-        let pageValue=try await js(web,"window.atlasTerrain.pageMap()")
-        let page=try JSONDecoder().decode(CrawlerPageMap.self,from:JSONSerialization.data(withJSONObject:pageValue as Any))
-        try require(page.links.count == 3,"Whole-page link count must count repeated destinations")
-        try require(page.images.count == 1,"Whole-page map lost the image")
-        let longest=try CrawlerPageAnalysis.longest(page,sentence:false).unwrap()
-        try require(longest.text == "pneumonoultramicroscopicsilicovolcanoconiosis","Wrong longest word")
-        chat.send("find the longest sentence in this page")
-        try await waitUntil {for _ in 0..<6 {crawler.tick(dt:0.03)};return !chat.pageTaskActive}
-        try require(chat.pageTaskStatus == "Complete","Sentence action failed: \(chat.lines.last?.text ?? "")")
-        let sentenceMark=try await js(web,"[...CSS.highlights.get('atlas-page')].map(r=>r.toString()).join('')") as? String ?? ""
-        try require(sentenceMark.contains(longest.text) && sentenceMark.contains("creature"),"Sentence highlight lost inline text")
-        chat.send("count the hyperlinks")
-        try await waitUntil {for _ in 0..<6 {crawler.tick(dt:0.03)};return !chat.pageTaskActive}
-        let linkMarks=try await js(web,"CSS.highlights.get('atlas-page').size") as? Int
-        try require(linkMarks == 3,"Link tour did not highlight all links: \(chat.lines.last?.text ?? "")")
-        crawler.intelligence.provider=PlanReplyProvider(reply:"My interpretation: the article is descriptive, but this excerpt gives little evidence for its claims.")
-        crawler.intelligence.model="test-reader"
-        chat.send("what do you think of this article?")
-        try await waitUntil {!chat.pageTaskActive}
-        try require(chat.lines.last?.text.contains("Opinion · test-reader") == true,"Opinion did not use selected model")
-        chat.send("find the longest word")
-        try await waitUntil {for _ in 0..<6 {crawler.tick(dt:0.03)};return !chat.pageTaskActive}
-        let wordMark=try await js(web,"[...CSS.highlights.get('atlas-page')].map(r=>r.toString()).join('')") as? String
-        try require(wordMark == longest.text,"Word highlight is not the exact source range")
-        _ = try await js(web,"document.querySelector('p').append(' Changed.')")
-        try await Task.sleep(for:.milliseconds(100))
-        let stalePageMark=try await js(web,"window.atlasTerrain.pageMark({id:\(quoted(longest.id)),start:\(longest.start),end:\(longest.end)},\(page.revision),false)") as? Bool
-        try require(stalePageMark == false,"Stale article map was accepted")
-
-        _ = try await js(web,"document.body.innerHTML='<p style=\"margin:40px;font-size:12px;line-height:18px;width:650px\">Cats chase mice and dogs chase hippopotamuses while birds chase insects.</p>';window.scrollTo(0,0)")
-        try await Task.sleep(for:.milliseconds(300))
-        let footMap=try JSONDecoder().decode(CrawlerPageMap.self,from:JSONSerialization.data(withJSONObject:try await js(web,"window.atlasTerrain.pageMap()") as Any))
-        let allowedFootWords=CrawlerPageAnalysis.ranges(footMap,unit:.word,footholds:["noun","verb"])
-        print("FOOT WORDS",allowedFootWords.map(\.text))
-        let firstFoot=try allowedFootWords.first.unwrap()
-        let footJSON=String(data:try JSONEncoder().encode([firstFoot]),encoding:.utf8)!
-        let footTargets=try JSONDecoder().decode([CrawlerPageTarget].self,from:JSONSerialization.data(withJSONObject:try await js(web,"window.atlasTerrain.pageResolve(JSON.parse(\(quoted(footJSON))),\(footMap.revision))") as Any))
-        let footStart=try footTargets.first.unwrap().rect.center
-        crawler.guide(to:footStart)
-        try await waitUntil {for _ in 0..<6 {crawler.tick(dt:0.03)};return crawler.agent.state.position.distance(to:footStart)<11}
-        chat.send("go to the longest word in this article but do so only stepping on nouns or verbs")
-        var observedStrictFeet=false
-        try await waitUntil {
-            if let permitted=crawler.pageFootholds {
-                observedStrictFeet=true
-                try require(crawler.legs.legs.allSatisfy {leg in permitted.contains {$0.position == leg.to}},"A restricted foot targeted blank space")
-            }
-            for _ in 0..<6 {crawler.tick(dt:0.03)}
-            return !chat.pageTaskActive
-        }
-        try require(observedStrictFeet && chat.pageTaskStatus == "Complete","Restricted gait did not execute: \(chat.lines.last?.text ?? "")")
-        print("RESTRICTED WEBKIT GAIT PASSED: noun/verb footholds, actual leg targets, arrival")
-        crawler.stop();crawler.intelligence.provider=originalProvider;crawler.intelligence.model=originalModel
-
-        _ = try await js(web,"document.body.innerHTML='<p>The beautiful red bird sings sweet songs.</p><h2>History</h2><p>A tall green tree grows.</p>';window.scrollTo(0,0)")
-        try await Task.sleep(for:.milliseconds(300))
-        crawler.intelligence.provider=CompanionFixtureProvider();crawler.intelligence.model="test-companion"
-        chat.talk("How many adjectives are in this article?")
-        try await waitUntil {!chat.companionBusy}
-        let counted=try chat.companionResults.last.unwrap()
-        try require(counted.count>0 && counted.title == "adjectives","Companion didn't save the exact word result")
-        try require(!crawler.active,"A count spawned the spider without a demonstration request")
-        chat.talk("Create a sentence using all these adjectives.")
-        try await waitUntil {!chat.companionBusy}
-        let composition=chat.lines.last?.text ?? ""
-        try require(Set(counted.ranges.map {$0.text.lowercased()}).allSatisfy {composition.lowercased().contains($0)},"Plain chat did not receive the saved adjective words")
-        try require(chat.companionFocus == counted.id,"Creative chat replaced the saved adjective finding")
-        _ = try await js(web,"window.dispatchEvent(new Event('resize'))")
-        try await Task.sleep(for:.milliseconds(100))
-        chat.talk("I bet you can't point at them.")
-        try await waitUntil {for _ in 0..<6 {crawler.tick(dt:0.03)};return !chat.companionBusy && !chat.companionTouring}
-        let proofCount=try await js(web,"CSS.highlights.get('atlas-page')?.size || 0") as? Int
-        try require(proofCount == counted.count,"Companion demonstration lost the saved adjective references: \(chat.lines.last?.text ?? "")")
-        chat.talk("What's the second longest word here?")
-        try await waitUntil {!chat.companionBusy}
-        let ranked=try chat.companionResults.last.unwrap()
-        try require(ranked.title == "Word ranked 2 by length" && ranked.count == 1 && ranked.id != counted.id,"Fresh ranking reused the old adjective finding")
-        chat.talk("What do you think of this article?")
-        try await waitUntil {!chat.companionBusy}
-        let evidence=try chat.companionResults.last.unwrap()
-        try require(evidence.title == "Supporting passages" && evidence.id != counted.id,"Discussion failed to replace the focused referent")
-        chat.talk("Prove it.")
-        try await waitUntil {for _ in 0..<6 {crawler.tick(dt:0.03)};return !chat.companionBusy && !chat.companionTouring}
-        let evidenceProof=try await js(web,"[...(CSS.highlights.get('atlas-page')||[])].map(r=>r.toString()).join('')") as? String ?? ""
-        try require(evidenceProof.contains("bird sings"),"Proof incorrectly referred back to individual adjectives")
-        _ = try await js(web,"document.querySelector('p').append(' New evidence changes the source.')")
-        try await Task.sleep(for:.milliseconds(100))
-        chat.talk("Prove it.")
-        try await waitUntil {!chat.companionBusy && !chat.companionTouring}
-        try require(chat.lines.last?.text.contains("page changed") == true,"Changed source content reused stale evidence")
-        crawler.stop();crawler.intelligence.provider=originalProvider;crawler.intelligence.model=originalModel
-        print("COMPANION PASSED: count without movement, saved targets, conversational challenge, discussion evidence, referent replacement")
-        print("EMBODIED PAGE TOOLS PASSED: whole-page map, inline sentence/word ranges, repeated-link tour, model opinion, stale-map rejection")
-        print("CRAWLER COMMANDS PASSED: speed, pause, directional approach, travel rules, local adjective highlights (\(marked.prefix(100))), clear, stop")
-    }
     static func quoted(_ value:String)->String { String(data:try! JSONEncoder().encode(value),encoding:.utf8)! }
 }
 private extension Optional {
     func unwrap() throws -> Wrapped { guard let value=self else { throw BrowserSmoke.Failure.check("Missing expected value") }; return value }
 }
 
-private struct DelayedCommandProvider:LLMProvider {
+/// Answers each request with a scripted plan; semantic-judgment prompts select the listed words.
+private struct ScriptedPlans:LLMProvider {
+    let plans:[String:String]
+    var judge:[String]=[]
     func models() async throws -> [AIModel] {[]}
-    func validate(model:String) async throws -> AIModel {throw AIError.unavailable}
+    func validate(model:String) async throws -> AIModel {.init(name:model,digest:"fixture",capabilities:["completion"])}
     func chat(model:String,messages:[AIMessage],json:Bool)->AsyncThrowingStream<String,Error> {
-        AsyncThrowingStream {continuation in
-            let task=Task {
-                try? await Task.sleep(for:.milliseconds(300))
-                continuation.yield(#"{"action":"direction","value":"right"}"#)
-                continuation.finish()
+        let last=messages.last?.content ?? ""
+        var reply=#"{"steps":[],"reply":"I'm not sure."}"#
+        if last.hasPrefix("Which of these words match") {
+            let lines=last.components(separatedBy:"\n").filter {$0.contains(": ")}
+            let picked=lines.compactMap {line -> Int? in
+                let parts=line.components(separatedBy:": ")
+                guard parts.count == 2,let index=Int(parts[0]),judge.contains(parts[1].lowercased()) else {return nil}
+                return index
             }
-            continuation.onTermination={_ in task.cancel()}
-        }
-    }
-}
-
-private struct WordSelectionProvider:LLMProvider {
-    func models() async throws -> [AIModel] {[]}
-    func validate(model:String) async throws -> AIModel {throw AIError.unavailable}
-    func chat(model:String,messages:[AIMessage],json:Bool)->AsyncThrowingStream<String,Error> {
-        AsyncThrowingStream {continuation in
-            Task {
-                try? await Task.sleep(for:.milliseconds(400))
-                continuation.yield(#"{"matches":[0]}"#)
-                continuation.finish()
-            }
-        }
-    }
-    func embed(model:String,texts:[String]) async throws -> [[Float]] {throw AIError.unavailable}
-}
-
-private struct RecordingWordProvider:LLMProvider {
-    let base:any LLMProvider
-    func models() async throws -> [AIModel] {try await base.models()}
-    func validate(model:String) async throws -> AIModel {try await base.validate(model:model)}
-    func chat(model:String,messages:[AIMessage],json:Bool)->AsyncThrowingStream<String,Error> {
-        AsyncThrowingStream {continuation in
-            let task=Task {
-                do {
-                    var reply=""
-                    for try await part in base.chat(model:model,messages:messages,json:json) {reply += part;continuation.yield(part)}
-                    print("TEST MODEL REPLY: \(reply.prefix(1000))")
-                    continuation.finish()
-                } catch {continuation.finish(throwing:error)}
-            }
-            continuation.onTermination={_ in task.cancel()}
-        }
-    }
-}
-
-private struct PlanReplyProvider:LLMProvider {
-    let reply:String
-    func models() async throws -> [AIModel] {[]}
-    func validate(model:String) async throws -> AIModel {throw AIError.unavailable}
-    func chat(model:String,messages:[AIMessage],json:Bool)->AsyncThrowingStream<String,Error> {
-        AsyncThrowingStream {continuation in continuation.yield(reply);continuation.finish()}
-    }
-}
-
-private struct CompanionFixtureProvider:LLMProvider {
-    func models() async throws -> [AIModel] {[]}
-    func validate(model:String) async throws -> AIModel {.init(name:model,digest:"test")}
-    func chat(model:String,messages:[AIMessage],json:Bool)->AsyncThrowingStream<String,Error> {
-        let input=messages.map(\.content).joined(separator:"\n")
-        func match(_ pattern:String)->String {
-            let regex=try! NSRegularExpression(pattern:pattern)
-            guard let result=regex.firstMatch(in:input,range:NSRange(input.startIndex...,in:input)),let range=Range(result.range(at:1),in:input) else {return "missing"}
-            return String(input[range])
-        }
-        let request=messages.last?.content.components(separatedBy:"LATEST REQUEST:\n").last ?? ""
-        let reply:String
-        if !json, messages.first?.content.contains("Classify the user's latest request") == true {
-            if request.contains("How many") || request.contains("second longest") {reply="TOOL"}
-            else if request.contains("point") || request.contains("Prove it") {reply="SHOW"}
-            else if request.contains("think") {reply="WHOLE_ARTICLE"}
-            else if request.contains("Create a sentence") {reply="SAVED_CHAT"}
-            else {reply="CHAT"}
-        } else if !json {
-            if request.contains("Create a sentence") {
-                reply="A vivid scene uses "+match(#"FOCUSED RESULT WORDS \([^\n]+\): ([^\n]+)"#)+"."
-            } else if request.contains("think") {
-                reply="The descriptive language makes the bird vivid, but the passage is not an evidence-based argument.\nSOURCE_IDS: "+match(#"\[(terrain-[^\]]+)\]"#)
-            } else {reply="Hello!"}
-        } else {
-            let value:[String:Any]
-            if request.contains("How many") {value=["operation":"words","kind":"adjectives","demonstrate":false]}
-            else if request.contains("second longest") {value=["operation":"rankedWord","rank":2,"distinct":true,"demonstrate":false]}
-            else {value=["operation":"show","resultID":match(#"FOCUSED RESULT: ([^\n]+)"#)]}
-            reply=String(data:try! JSONSerialization.data(withJSONObject:value),encoding:.utf8)!
+            reply=#"{"matches":"#+String(describing:picked)+"}"
+        } else if let request=last.components(separatedBy:"USER MESSAGE: ").last,let plan=plans[request] {
+            reply=plan
         }
         return AsyncThrowingStream {continuation in continuation.yield(reply);continuation.finish()}
-    }
-}
-
-private struct EmbodiedFixtureProvider:LLMProvider {
-    func models() async throws -> [AIModel] {[]}
-    func validate(model:String) async throws -> AIModel {.init(name:model,digest:"test")}
-    func chat(model:String,messages:[AIMessage],json:Bool)->AsyncThrowingStream<String,Error> {
-        let request=messages.last?.content.components(separatedBy:"LATEST REQUEST:\n").last ?? ""
-        let reply:String
-        if !json {
-            reply=messages.first?.content.contains("Classify the user's latest request") == true ? "TOOL":"I can read the page."
-        } else if request.localizedCaseInsensitiveContains("first word") {
-            reply=#"{"operation":"select","unit":"word","order":"first","demonstrate":true}"#
-        } else {
-            reply=#"{"operation":"select","unit":"word","order":"longest","demonstrate":true,"footholds":["noun","verb"]}"#
-        }
-        return AsyncThrowingStream {continuation in continuation.yield(reply);continuation.finish()}
-    }
-}
-
-private struct StatisticsFixtureProvider:LLMProvider {
-    func models() async throws -> [AIModel] {[]}
-    func validate(model:String) async throws -> AIModel {.init(name:model,digest:"test")}
-    func chat(model:String,messages:[AIMessage],json:Bool)->AsyncThrowingStream<String,Error> {
-        let reply:String
-        if json {
-            reply=messages.contains(where:{$0.content.localizedCaseInsensitiveContains("How many digits are in this article")})
-                ? #"{"operation":"measure","metric":"digits"}"#
-                : #"{"operation":"measure","metric":"letters"}"#
-        } else if messages.first?.content.contains("Classify the user's latest request") == true {
-            // A weak classifier's CHAT label must not redirect an exact count
-            // to unsupported free-form model arithmetic.
-            reply="CHAT"
-        } else {
-            reply="The page has maybe 99 letters."
-        }
-        return AsyncThrowingStream {continuation in continuation.yield(reply);continuation.finish()}
-    }
-}
-
-private struct NoArticleChatProvider:LLMProvider {
-    func models() async throws -> [AIModel] {[]}
-    func validate(model:String) async throws -> AIModel {.init(name:model,digest:"test")}
-    func chat(model:String,messages:[AIMessage],json:Bool)->AsyncThrowingStream<String,Error> {
-        AsyncThrowingStream {continuation in
-            if json {continuation.finish(throwing:AIError.invalidResponse)}
-            else {continuation.yield("Hello! We can talk without an article open.");continuation.finish()}
-        }
     }
 }

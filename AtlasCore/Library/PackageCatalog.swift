@@ -39,13 +39,38 @@ public actor PackageCatalog {
         return data
     }
     public func wikipedia(language: String = "") async throws -> [WikipediaPackage] {
+        try await kiwix(collection: "wikipedia", language: language)
+    }
+    /// The collections the Kiwix catalog offers (Wikipedia, Wiktionary, Project Gutenberg…), Wikipedia first.
+    public func kiwixCollections() async throws -> [KiwixCollection] {
+        let data=try await fetch(URL(string: "https://opds.library.kiwix.org/catalog/v2/categories")!)
+        return KiwixCollection.ordered(try Self.parseCategories(data))
+    }
+    /// The category names in the catalog's list of categories.
+    public static func parseCategories(_ data: Data) throws -> [String] {
+        let root=try CatalogXML.parse(data)
+        var names: [String]=[]
+        for entry in root.children where entry.name == "entry" {
+            let linked=entry.children.first { $0.name == "link" }?.attributes["href"]
+                .flatMap { URLComponents(string: $0)?.queryItems?.first { $0.name == "category" }?.value }
+            let name=(linked ?? entry.value("title")).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !name.isEmpty, name.count < 64, name.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") }),
+                  !names.contains(name) else { continue }
+            names.append(name)
+        }
+        return names
+    }
+    /// Every package in one Kiwix collection, smallest first.
+    public func kiwix(collection: String, language: String = "") async throws -> [WikipediaPackage] {
+        guard !collection.isEmpty, collection.count < 64,
+              collection.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") }) else { throw AtlasError.catalogUnavailable }
         var result: [WikipediaPackage] = []; var start=0
         while true {
             var url=URLComponents(string: "https://opds.library.kiwix.org/catalog/v2/entries")!
-            url.queryItems=[.init(name:"category",value:"wikipedia"),.init(name:"count",value:"1000"),.init(name:"start",value:String(start))]
+            url.queryItems=[.init(name:"category",value:collection),.init(name:"count",value:"1000"),.init(name:"start",value:String(start))]
             if !language.isEmpty { url.queryItems?.append(.init(name:"lang",value:language)) }
             let data=try await fetch(url.url!)
-            let page=try Self.parseOPDS(data, baseURL: url.url!)
+            let page=try Self.parseOPDS(data, baseURL: url.url!, category: collection)
             result += page.packages
             guard page.count > 0 else { break }
             start += page.count
@@ -54,7 +79,7 @@ public actor PackageCatalog {
         }
         return result.sorted { $0.downloadBytes < $1.downloadBytes }
     }
-    public static func parseOPDS(_ data: Data, baseURL: URL) throws -> (packages: [WikipediaPackage], count: Int, total: Int) {
+    public static func parseOPDS(_ data: Data, baseURL: URL, category: String? = nil) throws -> (packages: [WikipediaPackage], count: Int, total: Int) {
         let root=try CatalogXML.parse(data)
         let entries=root.children.filter { $0.name == "entry" }
         let packages=entries.compactMap { entry -> WikipediaPackage? in
@@ -68,7 +93,7 @@ public actor PackageCatalog {
             let title=entry.value("title") + (flavour == "mini" ? " — abridged" : "")
             return WikipediaPackage(id:id, name:title, languageCode:entry.value("language"), kind:kind,
                                     summary:entry.value("summary"), version:String(entry.value("issued").isEmpty ? entry.value("updated").prefix(10) : entry.value("issued").prefix(10)),
-                                    downloadURL:url, downloadBytes:size, format:.zim, source:"Kiwix / openZIM", family:name + ":" + flavour)
+                                    downloadURL:url, downloadBytes:size, format:.zim, source:"Kiwix / openZIM", family:name + ":" + flavour, category:category)
         }
         return (packages, entries.count, Int(root.value("totalResults")) ?? entries.count)
     }
@@ -120,10 +145,51 @@ public actor PackageCatalog {
                 let checksum=file.sha1.map {PackageChecksum(algorithm:.sha1,value:$0)} ?? file.md5.map {PackageChecksum(algorithm:.md5,value:$0)}
                 return WikipediaPackage(id:"wikimedia:"+name,name:name,languageCode:String(project.dropLast(4)),
                                         kind:name.contains("history") ? .historicalArchive : .rawDump,
-                                        summary:"Official Wikimedia dataset. Stored as an archive; not browsable.", version:date,
+                                        summary:LinkMapLibrary.dumpTable(name) != nil
+                                            ? "One of Wikipedia's database tables. Not readable on its own: Sematrica builds it into a link map for Connect the dots, “what links here” and categories."
+                                            : "Official Wikimedia dataset. Stored as an archive; not readable in Browse.", version:date,
                                         downloadURL:url,downloadBytes:size,checksum:checksum,format:.archive,source:"Wikimedia",
                                         family:name.replacingOccurrences(of:date,with:"snapshot"))
             }
+        }
+    }
+}
+
+/// A collection in the Kiwix library: Wikipedia, Wiktionary, Project Gutenberg, Stack Exchange…
+public struct KiwixCollection: Identifiable, Hashable, Sendable {
+    /// The catalog's category name.
+    public let id: String
+    public let title: String
+    public let summary: String
+    public init(id: String) {
+        self.id=id
+        let known=Self.known[id]
+        title=known?.title ?? id.split(whereSeparator: { $0 == "_" || $0 == "-" }).map { $0.prefix(1).uppercased()+$0.dropFirst() }.joined(separator: " ")
+        summary=known?.summary ?? ""
+    }
+    static let known: [String:(title: String, summary: String)]=[
+        "wikipedia":("Wikipedia","The encyclopedia, in every language and size"),
+        "wiktionary":("Wiktionary","Dictionaries: meanings, pronunciation, translations"),
+        "wikibooks":("Wikibooks","Open textbooks and manuals"),
+        "wikisource":("Wikisource","Original texts: literature, documents, speeches"),
+        "wikivoyage":("Wikivoyage","Travel guides"),
+        "wikiquote":("Wikiquote","Quotations"),
+        "wikiversity":("Wikiversity","Learning materials"),
+        "wikinews":("Wikinews","News articles"),
+        "gutenberg":("Project Gutenberg","Public-domain books"),
+        "stack_exchange":("Stack Exchange","Questions and answers: Stack Overflow, Super User, Math and more"),
+        "other":("Other","Guides, documentation and more")
+    ]
+    static let order=["wikipedia","wiktionary","wikibooks","wikisource","wikivoyage","wikiquote","wikiversity","wikinews","gutenberg","stack_exchange"]
+    /// Collections made of video or interactive simulations, which need scripts Sematrica doesn't run.
+    static let needsScripts: Set<String>=["ted","phet"]
+    /// Shown until the catalog's own list has been read.
+    public static let defaults=order.map(KiwixCollection.init)
+    /// The catalog's collections Sematrica can read, Wikipedia first and the familiar ones in a fixed order.
+    public static func ordered(_ names: [String]) -> [KiwixCollection] {
+        names.filter { !needsScripts.contains($0) }.map(KiwixCollection.init).sorted { a, b in
+            let left=order.firstIndex(of: a.id) ?? Int.max, right=order.firstIndex(of: b.id) ?? Int.max
+            return left != right ? left < right : a.title < b.title
         }
     }
 }

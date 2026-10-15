@@ -2,7 +2,7 @@ import Foundation
 import ZIMBridge
 
 /// An actor confines libzim's non-thread-safe suggestion searcher.
-public actor ZIMArticleProvider: ResearchArticleProvider {
+public actor ZIMArticleProvider: ResearchArticleProvider, LibraryArticleSource {
     private let access: LibraryAccess
     private let packageID: String
     private let handle: AZArchive
@@ -64,6 +64,35 @@ public actor ZIMArticleProvider: ResearchArticleProvider {
         guard let rows else {return []}
         return (0..<Int(count)).map {SearchResult(articleID:.init(packageID:packageID,path:String(cString:rows[$0].path)),title:String(cString:rows[$0].title),excerpt:"")}
     }
+    /// One page of the built-in full-text search, with libzim's estimate of all matches.
+    public func fullTextPage(_ query:String,offset:Int,limit:Int) async throws -> LibraryFullTextPage {
+        try access.validate();try Task.checkCancellation()
+        var rows:UnsafeMutablePointer<AZMatch>?;var count:Int32=0;var estimated:Int32=0;var error:UnsafeMutablePointer<CChar>?
+        defer {az_matches_free(rows,count);az_free(error)}
+        guard az_fulltext_page(handle,query,Int32(min(max(0,offset),Int(Int32.max))),Int32(min(500,max(1,limit))),&rows,&count,&estimated,&error) != 0 else {throw AtlasError.searchUnavailable}
+        let results=rows.map {p in (0..<Int(count)).map {SearchResult(articleID:.init(packageID:packageID,path:String(cString:p[$0].path)),title:String(cString:p[$0].title),excerpt:"")}} ?? []
+        return .init(results:results,estimated:Int(estimated))
+    }
+    /// The article each path leads to after redirects, from the archive's directory alone.
+    public func resolve(paths:[String]) async throws -> [String:SearchResult] {
+        guard !paths.isEmpty else {return [:]}
+        try access.validate();try Task.checkCancellation()
+        var resolved:[String:SearchResult]=[:]
+        for start in stride(from:0,to:paths.count,by:512) {
+            let chunk=Array(paths[start..<min(paths.count,start+512)])
+            let pointers:[UnsafePointer<CChar>?]=chunk.map {UnsafePointer(strdup($0))}
+            var rows:UnsafeMutablePointer<AZMatch>?;var count:Int32=0;var error:UnsafeMutablePointer<CChar>?
+            defer {az_matches_free(rows,count);az_free(error);pointers.forEach {free(UnsafeMutableRawPointer(mutating:$0))}}
+            let ok=pointers.withUnsafeBufferPointer {az_resolve_paths(handle,$0.baseAddress,Int32(chunk.count),&rows,&count,&error)}
+            guard ok != 0 else {throw AtlasError.articleUnavailable}
+            guard let rows else {continue}
+            for i in 0..<min(Int(count),chunk.count) {
+                let path=String(cString:rows[i].path)
+                if !path.isEmpty {resolved[chunk[i]]=SearchResult(articleID:.init(packageID:packageID,path:path),title:String(cString:rows[i].title),excerpt:"")}
+            }
+        }
+        return resolved
+    }
     public func articleBatch(offset:UInt64) async throws -> ArchiveArticleBatch {
         try access.validate();try Task.checkCancellation()
         var rows:UnsafeMutablePointer<AZMatch>?;var count:Int32=0;var next:UInt64=offset;var error:UnsafeMutablePointer<CChar>?
@@ -77,5 +106,28 @@ public actor ZIMArticleProvider: ResearchArticleProvider {
         var error: UnsafeMutablePointer<CChar>?
         defer { az_free(error) }
         guard az_validate(handle,&error) != 0 else { throw AtlasError.checksumMismatch }
+    }
+}
+
+extension ZIMArticleProvider {
+    /// Opens a ZIM file outside the library just long enough to read what it says about itself.
+    /// Throws when libzim can't open it, so a damaged or non-ZIM file is refused before anything is copied.
+    public static func fileInfo(at url: URL) throws -> ZIMFileInfo {
+        var error: UnsafeMutablePointer<CChar>?
+        let opened=az_open(url.path,&error)
+        az_free(error)
+        guard let archive=opened else { throw AtlasError.notZIM }
+        defer { az_close(archive) }
+        func value(_ key: String) -> String {
+            var text: UnsafeMutablePointer<CChar>?; var failure: UnsafeMutablePointer<CChar>?
+            defer { az_free(text); az_free(failure) }
+            guard az_metadata(archive,key,&text,&failure) != 0, let text else { return "" }
+            return String(cString: text)
+        }
+        var uuid: UnsafeMutablePointer<CChar>?
+        defer { az_free(uuid) }
+        let identity=az_uuid(archive,&uuid) != 0 ? uuid.map { String(cString: $0) } ?? "" : ""
+        return ZIMFileInfo(uuid: identity, title: value("Title"), name: value("Name"), language: value("Language"), description: value("Description"),
+                           date: value("Date"), flavour: value("Flavour"), tags: value("Tags"))
     }
 }

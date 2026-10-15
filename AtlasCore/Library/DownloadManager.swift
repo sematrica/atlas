@@ -17,8 +17,14 @@ public actor DownloadManager {
         let stored=try PackageManifest(access:newAccess).load()
         var next: [String:PackageRecord]=[:]
         for var record in stored {
-            if record.state == .downloading || record.state == .verifying {
-                record.state = .paused; record.message="Interrupted when Atlas closed. Resume to continue or finish verification."
+            if record.package.isImported && (record.state == .downloading || record.state == .verifying || record.state == .paused) {
+                // An import can't resume: its source file may be gone. Drop the partial copy.
+                let partial=try newAccess.file(record.partialPath)
+                if FileManager.default.fileExists(atPath:partial.path) { try? FileManager.default.removeItem(at:partial) }
+                record.state = .failed; record.receivedBytes=0; record.message=AtlasError.importInterrupted.localizedDescription
+                try PackageManifest(access:newAccess).save(record)
+            } else if record.state == .downloading || record.state == .verifying {
+                record.state = .paused; record.message="Interrupted when Sematrica closed. Resume to continue or finish verification."
                 try PackageManifest(access:newAccess).save(record)
             }
             if record.state == .installed {
@@ -41,9 +47,63 @@ public actor DownloadManager {
     }
     public func resume(_ id: String) throws {
         guard let access,let record=records[id] else { throw AtlasError.storageUnavailable }
+        guard !record.package.isImported else { throw AtlasError.importInterrupted }
         try access.validate()
         guard tasks[id] == nil,record.state != .installed,record.state != .corrupted else { throw AtlasError.busy }
         tasks[id]=Task { await self.run(id:id,access:access) }
+    }
+    /// Copies a ZIM file the user chose into the library, checks it and records it as installed.
+    /// An import can't be resumed: if it's cancelled or fails, the partial copy is removed and the
+    /// record says why, so the file can be imported again.
+    public func importArchive(from source: URL, package: WikipediaPackage) async throws {
+        try await connect()
+        guard let access else { throw AtlasError.storageUnavailable }
+        guard records[package.id] == nil else { throw AtlasError.alreadyInLibrary }
+        guard tasks[package.id] == nil else { throw AtlasError.busy }
+        let snapshot=try access.validate()
+        guard !snapshot.isReadOnly else { throw AtlasError.storageUnavailable }
+        guard let free=snapshot.availableBytes,free >= 16*1024*1024,package.downloadBytes <= free-16*1024*1024 else { throw AtlasError.insufficientSpace }
+        var record=PackageRecord(package:package)
+        record.state = .downloading; record.message="Copying into your library…"
+        try save(record,access:access)
+        tasks[record.id]=Task { await self.runImport(id:record.id,source:source,access:access) }
+    }
+    private func runImport(id:String,source:URL,access:LibraryAccess) async {
+        defer { tasks[id]=nil; progress[id]=nil }
+        guard var record=records[id] else { return }
+        do {
+            let partial=try access.file(record.partialPath), final=try access.file(record.relativePath)
+            let started=Date()
+            let copier=Task.detached(priority:.utility) {
+                try PackageImport.copy(from:source,to:partial) { bytes in
+                    let speed=Double(bytes)/max(0.001,Date().timeIntervalSince(started))
+                    Task { await self.receivedProgress(id:id,bytes:bytes,speed:speed,access:access) }
+                }
+            }
+            let copied=try await withTaskCancellationHandler { try await copier.value } onCancel: { copier.cancel() }
+            try Task.checkCancellation()
+            guard copied == record.package.downloadBytes else { throw AtlasError.incompleteDownload }
+            record=records[id] ?? record
+            record.state = .verifying; record.verification = .verifying; record.receivedBytes=copied; record.message=nil
+            try save(record,access:access)
+            try await checkFile(record:record,access:access,path:record.partialPath)
+            try Task.checkCancellation(); try access.validate()
+            try FileManager.default.moveItem(at:partial,to:final)
+            record.state = .installed; record.verification = .verified; record.updatedAt=Date(); record.message=nil
+            try save(record,access:access)
+        } catch {
+            if let partial=try? access.file(record.partialPath),FileManager.default.fileExists(atPath:partial.path) { try? FileManager.default.removeItem(at:partial) }
+            let cancelled=Task.isCancelled || error is CancellationError
+            record=records[id] ?? record
+            record.state = .failed; record.verification = .unverified; record.receivedBytes=0
+            if cancelled { record.message="Import cancelled. Remove it, then import the file again if you like." }
+            else if let known=error as? AtlasError,[.articleUnavailable,.unsupportedArchive,.searchUnavailable].contains(known) {
+                // The copy opened as something libzim can't read as an archive.
+                record.message=AtlasError.notZIM.localizedDescription
+            } else { record.message=AtlasLog.message(error) }
+            records[id]=record
+            try? PackageManifest(access:access).save(record)
+        }
     }
     public func pause(_ id: String) async {
         let task=tasks[id]; task?.cancel(); await task?.value

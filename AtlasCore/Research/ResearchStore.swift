@@ -136,6 +136,14 @@ public actor ResearchStore {
         let expression=terms.map {"\""+$0+"\""}.joined(separator:" OR ")
         return try query("SELECT payload FROM passages WHERE passages MATCH ? ORDER BY bm25(passages) LIMIT ?",[expression,String(min(100,max(1,limit)))]).map {try JSONDecoder().decode(RetrievedPassage.self,from:Data($0[0].utf8))}
     }
+    /// Every indexed article whose text contains the phrase, for library questions.
+    public func articlePaths(matching phrase:String,limit:Int) throws -> [String] {
+        let words=phrase.lowercased().split(whereSeparator:{!$0.isLetter && !$0.isNumber}).prefix(32)
+        guard !words.isEmpty else {return []}
+        // An FTS5 phrase: the words in this order, adjacent. Tokens never contain quotes.
+        let expression="\""+words.joined(separator:" ")+"\""
+        return try query("SELECT DISTINCT path FROM passages WHERE passages MATCH ? LIMIT ?",[expression,String(max(1,limit))]).map {$0[0]}
+    }
     public func save(_ run:ResearchRun) throws {_ = try query("INSERT OR REPLACE INTO jobs(id,updated,payload) VALUES(?,?,?)",[run.id,String(Date().timeIntervalSince1970),try json(run)])}
     public func recentRuns() throws -> [ResearchRun] {try query("SELECT payload FROM jobs ORDER BY updated DESC LIMIT 30").map {try JSONDecoder().decode(ResearchRun.self,from:Data($0[0].utf8))}}
     public func visited(job:String,path:String) throws -> Bool {try !query("SELECT path FROM visits WHERE job=? AND path=?",[job,path]).isEmpty}
@@ -177,5 +185,12 @@ public actor ResearchStore {
             run.queue.removeAll {$0 == id};try save(run)
             _ = try query("COMMIT");return run
         } catch {_ = try? query("ROLLBACK");throw error}
+    }
+}
+
+extension ResearchStore:LibraryTextIndex {
+    public func coverage() throws -> LibraryIndexCoverage {
+        let progress=try progress()
+        return .init(indexed:progress.articles,complete:progress.complete)
     }
 }

@@ -15,7 +15,7 @@ private enum Destination: String, CaseIterable, Identifiable {
     }
     var subtitle: String {
         switch self {
-        case .library: "Offline Wikipedia library"
+        case .library: "Offline library"
         case .browse: "An encyclopedia, entirely yours."
         case .search: "A direct route to what you need."
         case .ask: "Answers grounded in your library."
@@ -26,7 +26,7 @@ private enum Destination: String, CaseIterable, Identifiable {
     var detail: String {
         switch self {
         case .library: ""
-        case .browse: "Read local Wikipedia articles, follow their links, and pick up where you left off."
+        case .browse: "Read local articles, follow their links, and pick up where you left off."
         case .search: "Find titles and passages with fast, conventional full-text search. No language model required."
         case .ask: "Explore questions with a local model and citations that lead back to your offline articles."
         case .research: "Autonomous reading, evidence, and cited reports."
@@ -45,11 +45,11 @@ struct ContentView: View {
                 Label(item.rawValue, systemImage: item.symbol).tag(item)
                     .padding(.vertical, 5)
             }
-            .navigationTitle("Atlas")
+            .navigationTitle("Sematrica")
             .navigationSplitViewColumnWidth(min: 170, ideal: 200, max: 240)
             .safeAreaInset(edge: .bottom) {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("ATLAS").font(.caption.weight(.semibold)).tracking(3)
+                    Text("SEMATRICA").font(.caption.weight(.semibold)).tracking(3)
                     Text("wikipedia").font(.caption).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -61,7 +61,8 @@ struct ContentView: View {
                 if current == .library {
                     LibraryView(model: library)
                 } else if current == .browse || current == .search || current == .crawl {
-                    BrowserView(library: library.packages, browser: library.packages.browser, emphasizeSearch: current == .search, emphasizeCrawl: current == .crawl)
+                    BrowserView(library: library.packages, browser: library.packages.browser, emphasizeSearch: current == .search, emphasizeCrawl: current == .crawl,
+                                showLibrary: { destination = .library })
                 } else if current == .research {
                     ResearchView(research:library.packages.research,ai:library.packages.intelligence,browser:library.packages.browser,openSource:{passage in library.packages.browser.openCitation(passage);destination = .browse})
                 } else if current == .ask {

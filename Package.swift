@@ -9,7 +9,7 @@ let package = Package(
     targets: [
         .target(name: "ZIMBridge", path: "Native/ZIMBridge", publicHeadersPath: "include",
                 cxxSettings: [.unsafeFlags(["-I", root + "/Vendor/libzim/include"])],
-                linkerSettings: [.unsafeFlags(["-L", root + "/Vendor/libzim/lib"]), .linkedLibrary("zim"), .linkedLibrary("c++")]),
+                linkerSettings: [.unsafeFlags(["-L", root + "/Vendor/libzim/lib"]), .linkedLibrary("zim"), .linkedLibrary("c++"), .linkedLibrary("z")]),
         .target(name: "AtlasCore", dependencies: ["ZIMBridge"], path: "AtlasCore"),
         .testTarget(name: "AtlasCoreTests", dependencies: ["AtlasCore"], path: "Tests/AtlasCoreTests",
                     linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", root + "/Vendor/libzim/lib"])])

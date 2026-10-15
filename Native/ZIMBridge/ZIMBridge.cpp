@@ -78,6 +78,43 @@ int az_fulltext(AZArchive archive,const char *query,int limit,AZMatch **matches,
         copyMatches(rows,matches,count);return 1;
     } AZ_CATCH
 }
+int az_fulltext_page(AZArchive archive,const char *query,int offset,int limit,AZMatch **matches,int *count,int *estimated,char **error) {
+    try {
+        auto& archiveRef=static_cast<Reader *>(archive)->archive;
+        if(!archiveRef.hasFulltextIndex()) throw std::runtime_error("No full-text index in this archive");
+        zim::Searcher searcher(archiveRef);zim::Query q;q.setQuery(query);
+        auto search=searcher.search(q);
+        *estimated=search.getEstimatedMatches();
+        auto results=search.getResults(std::max(offset,0),std::min(std::max(limit,1),500));
+        std::vector<std::pair<std::string,std::string>> rows;
+        for(auto it=results.begin();it!=results.end();++it) rows.emplace_back(it.getPath(),it.getTitle());
+        copyMatches(rows,matches,count);return 1;
+    } AZ_CATCH
+}
+int az_metadata(AZArchive archive,const char *name,char **value,char **error) {
+    try { *value=strdup(static_cast<Reader *>(archive)->archive.getMetadata(name ? name : "").c_str()); return 1; } AZ_CATCH
+}
+int az_uuid(AZArchive archive,char **value) {
+    try { *value=strdup(static_cast<std::string>(static_cast<Reader *>(archive)->archive.getUuid()).c_str()); return 1; } catch(...) { return 0; }
+}
+int az_resolve_paths(AZArchive archive,const char *const *paths,int count,AZMatch **matches,int *resolved,char **error) {
+    try {
+        auto& a=static_cast<Reader *>(archive)->archive;
+        std::vector<std::pair<std::string,std::string>> rows;
+        rows.reserve(std::max(count,0));
+        for(int i=0;i<count;++i) {
+            std::string path,title;
+            try {
+                if(paths && paths[i] && *paths[i]) {
+                    auto item=a.getEntryByPath(paths[i]).getItem(true);
+                    if(item.getMimetype().find("text/html")!=std::string::npos) {path=item.getPath();title=item.getTitle();}
+                }
+            } catch(const std::exception &) {}
+            rows.emplace_back(path,title);
+        }
+        copyMatches(rows,matches,resolved);return 1;
+    } AZ_CATCH
+}
 int az_articles(AZArchive archive,uint64_t offset,int limit,AZMatch **matches,int *count,uint64_t *next,char **error) {
     try {
         auto& a=static_cast<Reader *>(archive)->archive;

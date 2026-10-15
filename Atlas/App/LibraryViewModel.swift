@@ -57,9 +57,9 @@ final class LibraryViewModel {
         defer { isBusy = false }
         let panel = NSOpenPanel()
         await packages.pauseAll()
-        panel.title = "Choose your Atlas library folder"
-        panel.message = "Choose or create a dedicated folder, such as Atlas on your external SSD. Library files will stay in this folder."
-        panel.prompt = "Use for Atlas"
+        panel.title = "Choose your Sematrica library folder"
+        panel.message = "Choose or create a dedicated folder, such as Sematrica on your external SSD. Library files will stay in this folder."
+        panel.prompt = "Use for Sematrica"
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false

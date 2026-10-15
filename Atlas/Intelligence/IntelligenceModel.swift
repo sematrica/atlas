@@ -21,6 +21,15 @@ final class IntelligenceModel {
     var progress=IndexProgress()
     var lastQuestion=""
     var history:[AIMessage]=[]
+    /// Instant estimate of how well the chat model suits the companion.
+    var fitEstimate:ModelFitEstimate?
+    /// A measured fit test for the current chat model, if one was run.
+    var fitReport:ModelFitReport?
+    var fitTesting=false
+    var fitProgress=0.0
+    @ObservationIgnored var onChatModelChange:(@MainActor (String)->Void)?
+    @ObservationIgnored var onFitChange:(@MainActor (ModelFitBadge?)->Void)?
+    @ObservationIgnored private var fitTask:Task<Void,Never>?
     @ObservationIgnored private let storage:StorageManager
     @ObservationIgnored private var index:SemanticIndex?
     @ObservationIgnored private var indexKey=""
@@ -30,6 +39,7 @@ final class IntelligenceModel {
     @ObservationIgnored private var generation=UUID()
     init(storage:StorageManager) {self.storage=storage}
     func saveSettings() {
+        onChatModelChange?(chatModel)
         UserDefaults.standard.set(chatModel,forKey:"atlas.chatModel")
         UserDefaults.standard.set(embeddingModel,forKey:"atlas.embeddingModel")
     }
@@ -42,8 +52,56 @@ final class IntelligenceModel {
             message=embeddingModels.isEmpty ? "No embedding model is installed. Install nomic-embed-text in Ollama, then Refresh Models. Chat models cannot build AI Search." : nil
         } catch {connection=error.localizedDescription}
     }
+    /// Reads the model's size and context window and rates it instantly.
+    func evaluateFit() async {
+        let model=chatModel
+        guard !model.isEmpty else {fitEstimate=nil;fitReport=nil;publishFit();return}
+        fitReport=storedReport(model)
+        do {
+            let profile=try await provider.profile(model:model)
+            guard model == chatModel else {return}
+            fitEstimate=ModelFit.estimate(profile)
+            if let report=fitReport,report.digest != profile.digest {fitReport=nil}
+        } catch {
+            if model == chatModel {fitEstimate=nil}
+        }
+        publishFit()
+    }
+    /// Runs real companion requests through the model and scores them.
+    func runFitTest() {
+        guard !fitTesting,!chatModel.isEmpty else {return}
+        let model=chatModel
+        fitTesting=true;fitProgress=0;message=nil
+        fitTask=Task {
+            do {
+                let digest=(try? await provider.profile(model:model).digest) ?? ""
+                let report=try await ModelFit.run(provider:provider,model:model,digest:digest) {[weak self] done,total in
+                    Task {@MainActor in self?.fitProgress=Double(done)/Double(max(1,total))}
+                }
+                if model == chatModel {fitReport=report;store(report);publishFit()}
+            } catch {
+                if !(error is CancellationError) {message="The fit test stopped: "+error.localizedDescription}
+            }
+            fitTesting=false
+        }
+    }
+    func cancelFitTest() {fitTask?.cancel();fitTask=nil;fitTesting=false}
+    private func publishFit() {
+        let badge:ModelFitBadge?
+        if let report=fitReport {badge = .init(rating:report.rating,summary:report.summary,measured:true)}
+        else if let estimate=fitEstimate {badge = .init(rating:estimate.rating,summary:estimate.summary,measured:false)}
+        else {badge=nil}
+        onFitChange?(badge)
+    }
+    private func storedReport(_ model:String)->ModelFitReport? {
+        guard let data=UserDefaults.standard.data(forKey:"atlas.fit."+model) else {return nil}
+        return try? JSONDecoder().decode(ModelFitReport.self,from:data)
+    }
+    private func store(_ report:ModelFitReport) {
+        if let data=try? JSONEncoder().encode(report) {UserDefaults.standard.set(data,forKey:"atlas.fit."+report.model)}
+    }
     func testModel() async {
-        do {let text=try await provider.generate(model:chatModel,prompt:"Reply with: Atlas is ready.");message=String(text.prefix(200))}
+        do {let text=try await provider.generate(model:chatModel,prompt:"Reply with: Sematrica is ready.");message=String(text.prefix(200))}
         catch {message=error.localizedDescription}
     }
     func reset() {
@@ -94,7 +152,7 @@ final class IntelligenceModel {
         Task {await task?.value;do {try await index?.cancelQueue();if let index {progress=await index.snapshot()}}catch {message=error.localizedDescription}}
     }
     func ask(browser:BrowserModel) {
-        guard !answering,let record=browser.record else {message="Open an installed Wikipedia package first.";return}
+        guard !answering,let record=browser.record else {message="Open an installed package first.";return}
         let text=question.trimmingCharacters(in:.whitespacesAndNewlines)
         guard !text.isEmpty else {return}
         let token=generation;answering=true;answer="";evidence=[];lastQuestion=text;message=nil

@@ -2,9 +2,9 @@
 
 The reported “invalid response” occurred with `llama3.1:latest` selected as both chat and embedding model. Ollama accepted chat but rejected embeddings. With zero indexed chunks, Ask had no evidence to retrieve.
 
-The fix separates model lists by Ollama's reported capabilities, replaces an incompatible saved selection during Refresh Models, preserves useful server errors, and prevents asking against an empty index. It also fixes reopening an existing index directory and prevents overlapping index starts. Answers without valid citation IDs receive one repair attempt; if that still fails, Atlas shows the actual retrieved passages with programmatically assigned citations.
+The fix separates model lists by Ollama's reported capabilities, replaces an incompatible saved selection during Refresh Models, preserves useful server errors, and prevents asking against an empty index. It also fixes reopening an existing index directory and prevents overlapping index starts. Answers without valid citation IDs receive one repair attempt; if that still fails, Sematrica shows the actual retrieved passages with programmatically assigned citations.
 
-On the development Mac, `nomic-embed-text:latest` is now installed locally. Keep `llama3.1:latest` as the chat model. After opening the rebuilt app, Refresh Models, open a relevant article and choose Index Current Article. For questions spanning topics, search titles and index the relevant search results. Indexing is incremental and scoped to the current package; Atlas does not automatically embed the entire Wikipedia package.
+On the development Mac, `nomic-embed-text:latest` is now installed locally. Keep `llama3.1:latest` as the chat model. After opening the rebuilt app, Refresh Models, open a relevant article and choose Index Current Article. For questions spanning topics, search titles and index the relevant search results. Indexing is incremental and scoped to the current package; Sematrica does not automatically embed the entire Wikipedia package.
 
 Verification on October 4, 2026:
 
