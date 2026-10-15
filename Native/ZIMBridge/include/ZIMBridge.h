@@ -32,6 +32,18 @@ int az_validate(AZArchive archive, char **error);
 void az_free(void *pointer);
 void az_item_free(AZItem *item);
 void az_matches_free(AZMatch *matches, int count);
+
+// gzip streams (Wikimedia's .sql.gz table dumps), through zlib.
+typedef void * AZGzip;
+AZGzip az_gz_open(const char *path);
+// Up to `length` decompressed bytes; 0 at the end, -1 on error.
+int az_gz_read(AZGzip file, void *buffer, int length);
+// How far into the compressed file reading has got, for progress.
+long long az_gz_offset(AZGzip file);
+void az_gz_close(AZGzip file);
+// Writing, used by tests to make fixtures.
+AZGzip az_gz_create(const char *path);
+int az_gz_write(AZGzip file, const void *buffer, int length);
 #ifdef __cplusplus
 }
 #endif

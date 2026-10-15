@@ -31,12 +31,14 @@ Anything that combines a **target**, **conditions** and an **action**:
 | when was he born? · what do you think of this article? | Answers from the article text; long questions read the whole article first. |
 | clear the green highlights · clear highlights | Removes some or all highlight layers. |
 | how many articles mention Atlantic Records | Reads every candidate article and counts exactly in each (see *Across the library*). |
-| which articles link to Paris | Lists the articles with a link to the Paris article, whatever the link says. |
+| which articles link to Paris · what links here | Lists the articles with a link to the Paris article (or the open one), whatever the link says. With a link map, every such article at once (see *Wikipedia's link map*). |
 | count jazz in the articles linked in the Discography section | Adds up the matches in every article that section links to. |
 | how many times is "soul" used in Ray Charles, Aretha Franklin and Sam Cooke | Reads just those articles (the model understands the list). |
 | check more articles | Continues a library question that stopped after its first batch. |
 | how is Ray Charles connected to Paris · connect this to the Moon | Finds the shortest chain of links between the two, walks it with the spider and draws it as a constellation (see *Connect the dots*). |
 | keep looking | Continues a connection search that stopped after its first batch. |
+| how many articles are in the category Jazz pianists · which articles are in Category:Jazz pianists | Counts or lists a Wikipedia category's articles (needs a link map). |
+| what categories is this article in · what categories does Ray Charles belong to | Lists an article's categories (needs a link map). |
 
 **Targets:** words (or nouns, verbs, adjectives, adverbs…), letters, characters, numbers, sentences, paragraphs, headings, links, images, names (people, places, organizations), and exact phrases.
 **Conditions:** starts with, ends with, contains or equals a spelling (with "or" alternatives), the negatives of those, part of speech, uppercase/lowercase/capitalized, length in letters or words, a section or sections to skip, unique spellings, and order (first, last, longest, shortest, most and least common, with a rank or a limit).
@@ -83,6 +85,27 @@ Ask how two articles are connected ("how is Ray Charles connected to Paris?", "c
 
 **Shortest, and how sure.** Once every article within a distance of the start has been read, no shorter chain can exist, and the answer says so: "That's the shortest chain: none of the 412 articles Ray Charles links to links to Paris directly." When a chain is found before its level has been read in full, the answer says a shorter one might exist. Sematrica reads up to 2,000 articles per request; **Keep looking** (or "keep looking") continues where it stopped. With neither a full-text index nor a text index, the search can only read outward, which still finds most chains of up to three links.
 
+With a link map built for the package's wiki, the chain comes from the map instead and is checked on the pages (next section). The answer then says it's the shortest chain in the map, rather than how many articles were read.
+
+## Wikipedia's link map
+
+A ZIM package holds each article's page but no index of which pages link where. Wikipedia publishes that index as table dumps, and Sematrica can turn them into a **link map**. In **Packages → Available → Wikimedia archives**, load a wiki's catalog (`enwiki`, `simplewiki`, `frwiki`…) and choose **Download the Link Map Files**. Then, under **Installed → Link maps**, choose **Build Link Map**. The build reads, in turn:
+
+1. `page`: every article gets a number; redirects are noted.
+2. `redirect`: each redirect is pointed at its article, so a link to "French capital" counts as a link to Paris.
+3. `linktarget` (dumps from 2024 on, whose links point into this table instead of naming titles).
+4. `pagelinks`: links between articles. Red links, links from talk or user pages, and links into other namespaces are left out.
+5. Both directions of every link are sorted into per-article lists.
+6. `categorylinks` (optional): which articles are directly in which categories.
+
+The files go into `indexes/linkmap-<wiki>-<date>/` (built in a `.building` folder and renamed only when complete) and are memory-mapped when used, so opening even English Wikipedia's map takes a moment and little memory. The build checks there's enough free space first and can be cancelled. A Wikipedia package uses the newest map for its wiki, matched by the package's name (`wikipedia_en_all_maxi` → `enwiki`, `wikipedia_en_simple_all` → `simplewiki`). Other collections, like Wiktionary or Gutenberg, have no link map.
+
+**Connect the dots with a map.** The shortest chain is found in the whole map at once, by searching from both ends; that takes well under a second even across millions of articles. Then each link of the chain is checked on the package's own pages, by reading the few articles on the chain, so the spider can still walk it. The dump and the package are made on different dates, and a ZIM can leave out the navigation boxes some links live in. So a link the pages don't have is avoided, and the map asked again; an article the package lacks is avoided the same way. The answer says how many links were avoided: "That's the shortest chain in Wikipedia's link map (2026-10-01), going around 1 link the map has that these pages don't." If the map doesn't know one of the articles (it's newer than the dump), or after eight tries the map still can't give a chain the pages share, the reading search runs as usual. If the map has no chain at all of 10 links or fewer, the answer says so straight away.
+
+**What links here.** "Which articles link to Paris?", "what links here" and "how many articles link to this article" are answered from the map, at once, for every article in the wiki, not only those that mention the title. Each article counts once, and links through redirects are included. The list under the reply shows the articles this package has, most linked-to first. Each one opens the article and highlights its links to the page. Questions the map can't answer exactly still read articles as before: links only in one section, or "how many times" (the map doesn't count repeated links within a page the way the page does).
+
+**Categories.** "How many articles are in the category Jazz pianists?", "which articles are in Category:Jazz pianists" and "what categories is this article in?" come from `categorylinks`. A category's count is of the articles directly in it, not in its subcategories. Maintenance categories editors use ("Articles with short description", "CS1 maint: …", "… stubs") are counted but not listed. A map built without `categorylinks` answers links but not categories.
+
 ## Models
 
 The companion works with any chat model installed in Ollama (0.5 or newer for schema output; older versions fall back to JSON mode). Under **Ask → Companion fit**:
@@ -101,3 +124,5 @@ For speed, Sematrica uses one context size for every request (changing it makes 
 - A very long article can exceed the page map's 2-million-character limit; counts then say they may be low.
 - Phrase hunts are deliberately local: the spider can't see the target until it is nearby, so a hunt can take a while.
 - Exploration across articles needs a chat model and stops after a bounded number of articles or evaluations.
+- A link map is as old as its dump. Articles newer than the dump fall back to reading, and "what links here" reflects the wiki on the dump's date, not the package's.
+- Building English Wikipedia's link map needs a few GB of memory and, while it runs, free space of about three times the `pagelinks` file.

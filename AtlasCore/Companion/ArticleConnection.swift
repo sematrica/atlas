@@ -9,6 +9,10 @@ import Foundation
 /// proposes articles that mention the target; those that really link to it become
 /// stepping stones. Once every article within a distance of the start has been read,
 /// every shorter chain has been ruled out, so the answer can say the chain is the shortest.
+///
+/// With a link map built from Wikipedia's table dumps, the chain comes from the whole
+/// graph of links at once. Each of its links is then checked on this package's pages,
+/// and links the pages don't have are routed around, so the spider can still walk it.
 public struct ConnectionStop:Codable,Sendable,Equatable,Identifiable {
     public var id:String {path}
     public let path:String
@@ -28,6 +32,8 @@ public struct ConnectionProgress:Sendable {
     /// Links in the best chain so far.
     public let steps:Int?
     public let current:String
+    /// Taking the chain from the link map and checking its links on the pages.
+    public var usingMap=false
 }
 
 struct ConnectionLink:Sendable {
@@ -54,6 +60,19 @@ public struct ConnectionRun:Sendable {
     public internal(set) var failed=0
     /// Articles that mention the target could be looked up (full-text search or the text index).
     public internal(set) var hinted=false
+    /// The link map the chain was found in: "Wikipedia's link map (2026-10-01)".
+    public internal(set) var mapSource:String?
+    /// Links in the map that these pages don't have, which the chain goes around.
+    public internal(set) var mapDetours=0
+    /// The link map has no chain between the two articles.
+    public internal(set) var mapUnconnected=false
+
+    /// The link map to search first, if one was built for this package's wiki.
+    var linkMap:LinkMap?
+    var mapTried=false
+    /// The text index, for looking up articles that mention the target.
+    var index:(any LibraryTextIndex)?
+    var hintsGathered=false
 
     // Breadth-first search outward from the start.
     var level=0
@@ -92,13 +111,16 @@ public enum ConnectionEngine {
     public static let defaultBudget=2_000
     /// Articles that mention the target, checked for a link to it.
     static let hintLimit=300
+    /// Chains taken from the link map before giving up on it and reading outward instead.
+    static let mapAttempts=8
 
     /// Finds both articles and the articles that mention the target.
     /// - Parameters:
     ///   - from: where to start; nil (or "this article") starts from `current`.
     ///   - current: the open article.
+    ///   - linkMap: Wikipedia's link map for this package, searched before reading outward.
     public static func start(from:String?,to:String,current:ArticleID?,packageID:String,source:any LibraryArticleSource,
-                             index:(any LibraryTextIndex)?) async throws -> ConnectionRun {
+                             index:(any LibraryTextIndex)?,linkMap:LinkMap?=nil) async throws -> ConnectionRun {
         let targetName=to.trimmingCharacters(in:.whitespacesAndNewlines)
         guard !targetName.isEmpty else {throw AIError.message("Which article should I connect to?")}
         guard let found=try await findArticle(targetName,source:source) else {
@@ -124,8 +146,16 @@ public enum ConnectionEngine {
         run.titles[start.path]=start.title;run.titles[target.path]=target.title
         if start.path == target.path {run.chain=[start];run.proven=true;return run}
         run.frontier=[start.path];run.depth[start.path]=0
+        run.linkMap=linkMap;run.index=index
+        // With a link map, mentions are looked up only if the map can't give the chain.
+        if linkMap == nil {try await gatherHints(&run,source:source)}
+        return run
+    }
 
-        // Articles that mention the target are the likeliest to link to it.
+    /// Articles that mention the target are the likeliest to link to it: they're checked first.
+    static func gatherHints(_ run:inout ConnectionRun,source:any LibraryArticleSource) async throws {
+        run.hintsGathered=true
+        let packageID=run.packageID,target=run.target,start=run.start
         var mentions:[SearchResult]=[]
         if try await source.hasArchiveFullText() {
             let title=target.title
@@ -139,15 +169,14 @@ public enum ConnectionEngine {
                 }
             }
             run.hinted=true
-        } else if let index,let coverage=try? await index.coverage(),coverage.indexed>0 {
+        } else if let index=run.index,let coverage=try? await index.coverage(),coverage.indexed>0 {
             mentions=try await index.articlePaths(matching:target.title,limit:hintLimit).map {.init(articleID:.init(packageID:packageID,path:$0),title:"",excerpt:"")}
             run.hinted=true
         }
         for result in mentions where result.articleID.path != target.path && result.articleID.path != start.path && run.hints.insert(result.articleID.path).inserted {
             run.toVerify.append(result.articleID.path)
-            if !result.title.isEmpty {run.titles[result.articleID.path]=result.title}
+            if !result.title.isEmpty,run.titles[result.articleID.path] == nil {run.titles[result.articleID.path]=result.title}
         }
-        return run
     }
 
     /// The article a name means. "the Moon" finds "Moon" when no article is called "the Moon".
@@ -165,7 +194,7 @@ public enum ConnectionEngine {
     }
 
     /// "this", "here", "this article", "this page": the open article.
-    static func isOpenArticle(_ text:String)->Bool {
+    public static func isOpenArticle(_ text:String)->Bool {
         let folded=PageQuery.fold(text).trimmingCharacters(in:.punctuationCharacters)
         return ["this","here","this article","this page","the article","the page","current article","the current article","this one","it"].contains(folded)
     }
@@ -175,13 +204,19 @@ public enum ConnectionEngine {
                                progress:(@Sendable (ConnectionProgress) async -> Void)?=nil) async throws -> ConnectionRun {
         var run=initial
         var reads=0,lastReport=Date.distantPast
-        struct Outcome:Sendable {let path:String;let title:String?;let raws:[String]}
+        if let map=run.linkMap,!run.mapTried {
+            run.mapTried=true
+            if let progress {await progress(.init(read:run.read,checkingMentions:false,level:1,steps:nil,current:map.sourceName,usingMap:true))}
+            reads += try await searchMap(&run,map:map,source:source)
+        }
+        if !run.isComplete,!run.hintsGathered {try await gatherHints(&run,source:source)}
         while !run.isComplete,reads<budget {
             try Task.checkCancellation()
             // The start first, then the articles that mention the target, then outward level by level.
             var batch:[String]=[]
             if !run.expanded.contains(run.start.path) {
-                batch=[run.start.path];run.frontier.removeAll {$0 == run.start.path}
+                let first=run.start.path
+                batch=[first];run.frontier.removeAll {$0 == first}
             } else if !run.toVerify.isEmpty {
                 while batch.count<max(1,concurrency),!run.toVerify.isEmpty {
                     let path=run.toVerify.removeFirst()
@@ -203,57 +238,24 @@ public enum ConnectionEngine {
                 }
             }
             if batch.isEmpty {continue}
-            let outcomes=try await withThrowingTaskGroup(of:Outcome.self) {group in
-                for path in batch {
-                    let id=ArticleID(packageID:run.packageID,path:path)
-                    group.addTask {
-                        do {
-                            let article=try await source.article(for:id)
-                            try Task.checkCancellation()
-                            let page=ArticlePageMap.make(article)
-                            var seen=Set<String>(),raws:[String]=[]
-                            for link in page.links {
-                                if let href=link.href,let raw=ArticleLinks.path(href,from:article.id.path),seen.insert(raw).inserted {raws.append(raw)}
-                            }
-                            return Outcome(path:path,title:article.title,raws:raws)
-                        } catch is CancellationError {throw CancellationError()}
-                        catch {return Outcome(path:path,title:nil,raws:[])}
-                    }
-                }
-                var all:[Outcome]=[]
-                for try await outcome in group {all.append(outcome)}
-                // Keep the batch's own order, so results don't depend on timing.
-                return batch.compactMap {path in all.first {$0.path == path}}
-            }
-            let unknown=Array(Set(outcomes.flatMap(\.raws)).filter {run.resolved[$0] == nil})
-            if !unknown.isEmpty {
-                let found=try await source.resolve(paths:unknown)
-                for raw in unknown {run.resolved[raw]=found[raw]?.articleID.path ?? ""}
-            }
-            for outcome in outcomes {
+            let pages=try await read(batch,&run,source:source)
+            for page in pages {
                 reads += 1;run.read += 1
-                let reached=run.depth[outcome.path] != nil && !run.expanded.contains(outcome.path) && run.depth[outcome.path] == run.level
-                guard let title=outcome.title else {
+                let reached=run.depth[page.path] != nil && !run.expanded.contains(page.path) && run.depth[page.path] == run.level
+                guard page.title != nil else {
                     run.failed += 1
                     if reached {
-                        run.expanded.insert(outcome.path)
+                        run.expanded.insert(page.path)
                         run.failedLevels.insert(run.level)
                     }
                     continue
                 }
-                if run.titles[outcome.path] == nil || run.titles[outcome.path]?.isEmpty == true {run.titles[outcome.path]=title}
-                var links:[ConnectionLink]=[]
-                for raw in outcome.raws {
-                    guard let path=run.resolved[raw],!path.isEmpty,path != outcome.path else {continue}
-                    links.append(.init(raw:raw,path:path))
-                }
-                if let link=links.first(where:{$0.path == run.target.path}) {run.intoTarget[outcome.path]=link.raw}
                 if reached {
-                    expand(&run,outcome.path,links:links)
+                    expand(&run,page.path,links:page.links)
                 } else {
-                    run.cachedLinks[outcome.path]=links
+                    run.cachedLinks[page.path]=page.links
                     // A stepping stone the search already reached: the chain runs through it.
-                    if let raw=run.intoTarget[outcome.path],run.depth[outcome.path] != nil {offer(&run,through:outcome.path,finalVia:raw)}
+                    if let raw=run.intoTarget[page.path],run.depth[page.path] != nil {offer(&run,through:page.path,finalVia:raw)}
                 }
             }
             if batch == [run.start.path] {
@@ -266,11 +268,119 @@ public enum ConnectionEngine {
             settle(&run)
             if let progress,Date().timeIntervalSince(lastReport)>0.25 {
                 lastReport=Date()
-                await progress(.init(read:run.read,checkingMentions:!run.toVerify.isEmpty,level:max(1,run.level),steps:run.steps,current:outcomes.last.flatMap {run.titles[$0.path]} ?? ""))
+                await progress(.init(read:run.read,checkingMentions:!run.toVerify.isEmpty,level:max(1,run.level),steps:run.steps,current:pages.last.flatMap {run.titles[$0.path]} ?? ""))
             }
         }
         settle(&run)
         return run
+    }
+
+    /// An article read for the search, with the articles its links lead to. No title means it couldn't be read.
+    struct ReadPage:Sendable {let path:String;let title:String?;let links:[ConnectionLink]}
+
+    /// Reads articles at once and resolves where their links lead (the run remembers every link resolved).
+    static func read(_ batch:[String],_ run:inout ConnectionRun,source:any LibraryArticleSource) async throws -> [ReadPage] {
+        struct Outcome:Sendable {let path:String;let title:String?;let raws:[String]}
+        let packageID=run.packageID
+        let outcomes=try await withThrowingTaskGroup(of:Outcome.self) {group in
+            for path in batch {
+                let id=ArticleID(packageID:packageID,path:path)
+                group.addTask {
+                    do {
+                        let article=try await source.article(for:id)
+                        try Task.checkCancellation()
+                        let page=ArticlePageMap.make(article)
+                        var seen=Set<String>(),raws:[String]=[]
+                        for link in page.links {
+                            if let href=link.href,let raw=ArticleLinks.path(href,from:article.id.path),seen.insert(raw).inserted {raws.append(raw)}
+                        }
+                        return Outcome(path:path,title:article.title,raws:raws)
+                    } catch is CancellationError {throw CancellationError()}
+                    catch {return Outcome(path:path,title:nil,raws:[])}
+                }
+            }
+            var all:[Outcome]=[]
+            for try await outcome in group {all.append(outcome)}
+            // Keep the batch's own order, so results don't depend on timing.
+            return batch.compactMap {path in all.first {$0.path == path}}
+        }
+        let unknown=Array(Set(outcomes.flatMap(\.raws)).filter {run.resolved[$0] == nil})
+        if !unknown.isEmpty {
+            let found=try await source.resolve(paths:unknown)
+            for raw in unknown {run.resolved[raw]=found[raw]?.articleID.path ?? ""}
+        }
+        return outcomes.map {outcome in
+            guard let title=outcome.title else {return ReadPage(path:outcome.path,title:nil,links:[])}
+            if run.titles[outcome.path] == nil || run.titles[outcome.path]?.isEmpty == true {run.titles[outcome.path]=title}
+            var links:[ConnectionLink]=[]
+            for raw in outcome.raws {
+                guard let path=run.resolved[raw],!path.isEmpty,path != outcome.path else {continue}
+                links.append(.init(raw:raw,path:path))
+            }
+            if let link=links.first(where:{$0.path == run.target.path}) {run.intoTarget[outcome.path]=link.raw}
+            return ReadPage(path:outcome.path,title:title,links:links)
+        }
+    }
+
+    /// Takes the shortest chain from the link map and checks each of its links on this package's
+    /// pages. A link the pages don't have (the dump and the package were made at different times,
+    /// or the link sits in a template the package left out) is avoided and the map asked again.
+    /// When the map can't give a chain the pages share, the search reads outward instead.
+    /// Returns how many articles were read.
+    static func searchMap(_ run:inout ConnectionRun,map:LinkMap,source:any LibraryArticleSource) async throws -> Int {
+        guard let from=map.node(run.start.path) ?? map.node(run.start.title),
+              let to=map.node(run.target.path) ?? map.node(run.target.title),from != to else {return 0}
+        var avoidEdges=Set<UInt64>(),avoidNodes=Set<Int32>()
+        // The map's articles as this package's paths; "" when the package doesn't have one.
+        var paths:[Int32:String]=[from:run.start.path,to:run.target.path]
+        var pages:[String:ReadPage]=[:]
+        var reads=0,detours=0
+        let prefix=run.start.path.hasPrefix("A/") ? "A/" : ""
+        for _ in 0..<mapAttempts {
+            try Task.checkCancellation()
+            guard let nodes=map.shortestPath(from:from,to:to,avoidingEdges:avoidEdges,avoidingNodes:avoidNodes) else {
+                if avoidEdges.isEmpty,avoidNodes.isEmpty {
+                    run.mapUnconnected=true;run.exhausted=true;run.mapSource=map.sourceName
+                }
+                return reads
+            }
+            let unknown=nodes.filter {paths[$0] == nil}
+            if !unknown.isEmpty {
+                let found=try await map.articles(unknown,in:source,prefix:prefix)
+                for node in unknown {paths[node]=found[node]?.articleID.path ?? ""}
+            }
+            let missing=nodes.filter {paths[$0]?.isEmpty != false}
+            if !missing.isEmpty {avoidNodes.formUnion(missing);detours += missing.count;continue}
+            var toRead:[String]=[]
+            for node in nodes.dropLast() where pages[paths[node]!] == nil && !toRead.contains(paths[node]!) {toRead.append(paths[node]!)}
+            if !toRead.isEmpty {
+                for page in try await read(toRead,&run,source:source) {
+                    pages[page.path]=page
+                    // Kept for the outward search, should the map not work out.
+                    if page.title != nil,page.path != run.start.path {run.cachedLinks[page.path]=page.links}
+                }
+                reads += toRead.count;run.read += toRead.count
+            }
+            var chain=[run.start],broken=false
+            for index in 1..<nodes.count {
+                let before=nodes[index-1],node=nodes[index]
+                guard let page=pages[paths[before]!],page.title != nil else {
+                    if index == 1 {return reads}  // the start can't be read
+                    avoidNodes.insert(before);broken=true;detours += 1;continue
+                }
+                guard let link=page.links.first(where:{$0.path == paths[node]!}) else {
+                    avoidEdges.insert(UInt64(UInt32(bitPattern:before))<<32|UInt64(UInt32(bitPattern:node)));broken=true;detours += 1;continue
+                }
+                let path=paths[node]!
+                let title=index == nodes.count-1 ? run.target.title : pages[path]?.title ?? map.readableTitle(node)
+                chain.append(.init(path:path,title:title,via:link.raw))
+            }
+            if broken {continue}
+            run.chain=chain;run.settled=true
+            run.mapSource=map.sourceName;run.mapDetours=detours
+            return reads
+        }
+        return reads
     }
 
     /// Records an article's links: the next level, and any chain they complete.
@@ -338,6 +448,7 @@ extension ConnectionRun {
     public var answer:String {
         let from=start.title,to=target.title
         guard let chain else {
+            if mapUnconnected,let mapSource {return "There's no chain of 10 links or fewer from \(from) to \(to) in \(mapSource)."}
             if exhausted {return "There's no chain of links from \(from) to \(to): I read every article \(from) leads to (\(LibraryRun.format(read)))."}
             var text="I haven't connected \(from) to \(to) yet after reading \(LibraryRun.format(read)) articles. Say “keep looking” to search further."
             if !hinted {text += " This package has no full-text search, so I can only search outward from \(from); building the text index under Research helps me find faraway articles."}
@@ -347,7 +458,11 @@ extension ConnectionRun {
         let steps=chain.count-1
         if steps == 1 {return "\(from) links straight to \(to)."}
         var text=chain.map(\.title).joined(separator:" → ")+": \(steps) links."
-        if proven {
+        if let mapSource {
+            text += " That's the shortest chain in \(mapSource)"
+            text += mapDetours == 0 ? ", and every link in it is on these pages."
+                                    : ", going around \(LibraryRun.format(mapDetours)) link\(mapDetours == 1 ? "" : "s") the map has that these pages don't."
+        } else if proven {
             if steps == 2 {text += " That's the shortest chain: \(from) doesn't link to \(to) itself."}
             else if steps == 3 {
                 let n=levelSizes[1] ?? 0

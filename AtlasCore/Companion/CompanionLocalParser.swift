@@ -18,6 +18,8 @@ public enum CompanionLocalParser {
         cursor.i=0
         if let plan=connectRequest(&cursor,original:request) {return plan}
         cursor.i=0
+        if let plan=categoryRequest(&cursor,original:request) {return plan}
+        cursor.i=0
         if let plan=libraryRequest(&cursor,original:request) {return plan}
         cursor.i=0
         return taskRequest(&cursor)
@@ -291,6 +293,11 @@ public enum CompanionLocalParser {
             var step=CompanionStep(action:"library");step.result="more"
             return .init(steps:[step],local:true)
         }
+        // "what links here" (MediaWiki's name for it), "which articles link here".
+        if let last=cursor.tokens.last,!last.quoted,last.text == "here",cursor.tokens.count>=2,
+           ["link","links","linking","point","points","pointing"].contains(cursor.tokens[cursor.tokens.count-2].text) {
+            cursor=Cursor(tokens:cursor.tokens.dropLast()+["to","this","article"].map {Token(text:$0,quoted:false)})
+        }
         var measure:String
         var verb:String?
         if cursor.accept(sequence:["what","links","to"]) || cursor.accept(sequence:["what","link","to"]) {
@@ -368,6 +375,87 @@ public enum CompanionLocalParser {
         step.measure=measure
         step.scope=scope ?? "library"
         step.place=section
+        return .init(steps:[step],local:true)
+    }
+
+    // MARK: Categories
+
+    /// "how many articles are in the category Jazz pianists", "which articles are in Category:Jazz pianists",
+    /// "list the pages in the jazz pianists category", "what categories is this article in",
+    /// "what categories does Ray Charles belong to".
+    static func categoryRequest(_ cursor:inout Cursor,original request:String)->CompanionPlan? {
+        let body={(cursor:Cursor) in Array(cursor.tokens[cursor.i...])}
+        /// "(the) category X", "(the) X category", "Category:X".
+        func categoryName(_ words:[Token])->String? {
+            var words=words
+            if let first=words.first,!first.quoted,first.text == "the" {words.removeFirst()}
+            if let first=words.first,!first.quoted,first.text == "category" {
+                words.removeFirst()
+                if words.first?.text == ":" {words.removeFirst()}
+            } else if let last=words.last,!last.quoted,last.text == "category" {
+                words.removeLast()
+            } else {return nil}
+            guard !words.isEmpty,words.count<=10,!words.contains(where:{!$0.quoted && $0.text == ":"}) else {return nil}
+            return original(words.map(\.text).joined(separator:" "),in:request)
+        }
+        func ends(_ words:inout [Token],with tails:[[String]])->Bool {
+            for tail in tails where words.count>tail.count && words.suffix(tail.count).map(\.text) == tail && !words.suffix(tail.count).contains(where:\.quoted) {
+                words.removeLast(tail.count);return true
+            }
+            return false
+        }
+
+        // The articles in a category.
+        var measure:String?
+        if cursor.accept(sequence:["how","many"]) {
+            if cursor.accept(articleWords) != nil {measure="articles"}
+        } else if cursor.accept(["which","what"]) != nil {
+            if cursor.accept(articleWords) != nil {measure="list"}
+            else if cursor.accept("is") {measure="list"}
+        } else if cursor.accept(["whats","what's"]) != nil {
+            measure="list"
+        } else {
+            for lead in [["list"],["show","me"],["give","me"],["find"],["name"]] where cursor.accept(sequence:lead) {
+                cursor.skip(["the","all","every"])
+                if cursor.accept(articleWords) != nil {measure="list"}
+                break
+            }
+        }
+        if let measure {
+            cursor.skip(["are","is","there","exactly"])
+            var name:String?
+            if cursor.accept("in") || cursor.accept(sequence:["belong","to"]) || cursor.accept(sequence:["belonging","to"]) || cursor.accept("under") {
+                name=categoryName(body(cursor))
+            } else if cursor.accept(["does","do"]) != nil {
+                var words=body(cursor)
+                if ends(&words,with:[["have"],["contain"],["include"],["hold"]]) {name=categoryName(words)}
+            }
+            if let name {
+                var step=CompanionStep(action:"category");step.title=name;step.measure=measure
+                return .init(steps:[step],local:true)
+            }
+        }
+
+        // The categories an article is in.
+        cursor.i=0
+        let leads:[[String]]=[["what","are","the"],["what","are"],["which","are","the"],["which","are"],["list","the"],["list","all","the"],["list","all"],["list"],
+                              ["show","me","the"],["show","me"],["give","me","the"],["name","the"],["what"],["which"]]
+        guard leads.sorted(by:{$0.count>$1.count}).contains(where:{cursor.accept(sequence:$0)}),cursor.accept(["categories","category"]) != nil else {return nil}
+        var words=body(cursor)
+        if words.isEmpty {
+        } else if !words[0].quoted,["of","for"].contains(words[0].text) {
+            words.removeFirst()
+        } else if !words[0].quoted,["is","are","was"].contains(words[0].text) {
+            words.removeFirst()
+            guard ends(&words,with:[["in"],["part","of"],["filed","under"],["listed","under"]]) else {return nil}
+        } else if !words[0].quoted,["does","do"].contains(words[0].text) {
+            words.removeFirst()
+            guard ends(&words,with:[["belong","to"],["belong","in"],["fall","under"],["fall","into"],["fall","in"],["have"],["appear","in"]]) else {return nil}
+        } else {return nil}
+        guard words.count<=10 else {return nil}
+        let article=words.map(\.text).joined(separator:" ")
+        var step=CompanionStep(action:"category")
+        if !article.isEmpty,!openArticleWords.contains(article) {step.from=original(article,in:request)}
         return .init(steps:[step],local:true)
     }
 

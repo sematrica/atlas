@@ -21,6 +21,8 @@ struct ConnectionLine {
     var chain:[ConnectionStop]
     var found:Bool
     var proven:Bool
+    /// The chain came from Wikipedia's link map.
+    var mapped=false
     /// Articles read so far; the map shows them as faint stars.
     var read:Int
     /// The search stopped early and can keep looking.
@@ -35,10 +37,12 @@ struct LibraryLine {
     /// Matching articles, most matches first (the first 200).
     let hits:[LibraryHit]
     let matchingArticles:Int
-    /// What each Open button highlights in the article it opens.
-    let query:PageQuery
+    /// What each Open button highlights in the article it opens; nil opens without highlighting.
+    let query:PageQuery?
     /// More articles remain to be read.
     var canContinue:Bool
+    /// Each hit's count is a number of matches worth showing (not for link map lists).
+    var counted=true
 }
 
 /// A colored highlight layer currently painted on the page.
@@ -339,6 +343,8 @@ final class CrawlerConversation {
             try await library(step,page:page,local:local,token:token)
         case "connect":
             try await connect(step,local:local,token:token)
+        case "category":
+            try await category(step,local:local,token:token)
         default:
             say("I don't know how to “\(step.action)” yet.")
         }
@@ -741,7 +747,21 @@ final class CrawlerConversation {
             guard !previous.isComplete else {say("I've already read every article for that question.");return}
             run=previous
         } else {
-            guard let request=step.libraryRequest else {say("What should I count or find in each article?");return}
+            guard var request=step.libraryRequest else {say("What should I count or find in each article?");return}
+            // "What links here": the open article.
+            if let target=request.query.linksTo,ConnectionEngine.isOpenArticle(target) {
+                guard let id=browser.currentArticleID else {say("Open an article first, or tell me which one: “which articles link to Paris?”");return}
+                request.query.linksTo=browser.title.isEmpty ? ArticleLinks.destinationTitle(id.path) : browser.title
+                if let map=browser.linkMap,request.linksHereTarget != nil,let node=map.node(id.path) {
+                    try await linksHere(node,map:map,request:request,source:source,local:local,token:token);return
+                }
+            }
+            if let map=browser.linkMap,let target=request.linksHereTarget {
+                status="Looking it up in the link map…"
+                if let node=try await map.node(named:target,source:source) {
+                    try await linksHere(node,map:map,request:request,source:source,local:local,token:token);return
+                }
+            }
             var index:(any LibraryTextIndex)?
             if request.scope == "library",!request.searchTexts.isEmpty {
                 let fullText=try await source.hasArchiveFullText()
@@ -773,9 +793,26 @@ final class CrawlerConversation {
         }
     }
 
+    /// "Which articles link to Paris?" from Wikipedia's link map: every article that links there,
+    /// not only those that mention it, at once. The list holds the ones this package has.
+    private func linksHere(_ node:Int32,map:LinkMap,request:LibraryRequest,source:any LibraryArticleSource,local:Bool,token:UUID) async throws {
+        // A popular article can have a million backlinks: sort them off the main thread.
+        let sources=await Task.detached {map.backlinksByPopularity(node)}.value
+        let prefix=crawler?.intelligence.browser?.currentArticleID?.path.hasPrefix("A/") == true ? "A/" : ""
+        let hits=try await map.hits(sources,in:source,prefix:prefix)
+        try checkpoint(token)
+        let line=say(map.linksHereAnswer(node,sources:sources,list:request.measure == "list"))
+        amend(line,trail:local ? "understood instantly" : nil)
+        amend(line,trail:"link map \(map.manifest.readableDate)")
+        guard !hits.isEmpty,let index=lines.firstIndex(where:{$0.id == line}) else {return}
+        var query=PageQuery(unit:"link");query.linksTo=map.readableTitle(node)
+        lines[index].library=LibraryLine(hits:hits,matchingArticles:sources.count,query:query.normalized(),canContinue:false,counted:false)
+    }
+
     /// Opens an article from a library answer and highlights what was counted there.
-    func openLibraryHit(_ hit:LibraryHit,query:PageQuery) {
+    func openLibraryHit(_ hit:LibraryHit,query:PageQuery?) {
         var open=CompanionStep(action:"open");open.title=hit.title;open.path=hit.path
+        guard let query else {run(CompanionPlan(steps:[open],local:true),saying:"Open “\(hit.title)”");return}
         let highlight=CompanionStep(action:"highlight",query:query)
         run(CompanionPlan(steps:[open,highlight],local:true),saying:"Open “\(hit.title)” and show the matches")
     }
@@ -797,13 +834,13 @@ final class CrawlerConversation {
         var run:ConnectionRun
         if step.result == "more" {
             guard let previous=connectionRun,previous.packageID == record.id else {say("There's no connection search to continue.");return}
-            guard !previous.isComplete else {say(previous.proven ? "That's already the shortest chain." : "I've looked as far as I can for that one.");return}
+            guard !previous.isComplete else {say(previous.proven || previous.mapSource != nil ? "That's already the shortest chain." : "I've looked as far as I can for that one.");return}
             run=previous
         } else {
             status="Finding both articles…"
             var index:(any LibraryTextIndex)?
             if !(try await source.hasArchiveFullText()) {index=await browser.libraryTextIndex()}
-            run=try await ConnectionEngine.start(from:step.from,to:step.title ?? "",current:browser.currentArticleID,packageID:record.id,source:source,index:index)
+            run=try await ConnectionEngine.start(from:step.from,to:step.title ?? "",current:browser.currentArticleID,packageID:record.id,source:source,index:index,linkMap:browser.linkMap)
         }
         try checkpoint(token)
         let from=run.start.title,to=run.target.title
@@ -813,13 +850,17 @@ final class CrawlerConversation {
         let began=Date()
         run=try await ConnectionEngine.advance(run,source:source) {@MainActor [weak self] progress in
             guard let self,token == self.generation else {return}
-            self.status=progress.checkingMentions ? "Checking articles that mention \(to)…" : "Read \(Self.format(progress.read)) articles, \(progress.level) link\(progress.level == 1 ? "" : "s") out"
+            self.status=progress.usingMap ? "Tracing it in \(progress.current)…"
+                : progress.checkingMentions ? "Checking articles that mention \(to)…" : "Read \(Self.format(progress.read)) articles, \(progress.level) link\(progress.level == 1 ? "" : "s") out"
             self.updateConnection(line) {$0.read=progress.read}
         }
         try checkpoint(token)
         connectionRun=run
         amend(line,text:run.answer,trail:String(format:"%.1f s",Date().timeIntervalSince(began)))
-        setConnection(line,ConnectionLine(chain:run.chain ?? [run.start,run.target],found:run.chain != nil,proven:run.proven,read:run.read,canContinue:!run.isComplete))
+        let mapped=run.chain != nil && run.mapSource != nil
+        if run.mapSource != nil {amend(line,trail:"link map")}
+        setConnection(line,ConnectionLine(chain:run.chain ?? [run.start,run.target],found:run.chain != nil,proven:run.proven || mapped,mapped:mapped,
+                                          read:run.read,canContinue:!run.isComplete))
         if let chain=run.chain,chain.count>1 {try await walkRoute(chain,line:line,token:token)}
     }
 
@@ -829,6 +870,44 @@ final class CrawlerConversation {
     private func updateConnection(_ line:UUID,_ change:(inout ConnectionLine)->Void) {
         guard let index=lines.firstIndex(where:{$0.id == line}),var value=lines[index].connection else {return}
         change(&value);lines[index].connection=value
+    }
+
+    // MARK: Categories
+
+    /// Wikipedia's categories, from the link map: how many articles a category holds and which,
+    /// or which categories an article is in.
+    private func category(_ step:CompanionStep,local:Bool,token:UUID) async throws {
+        guard let browser=crawler?.intelligence.browser,browser.record != nil,let source=browser.provider as? any LibraryArticleSource else {
+            say("Open a package in Library first.");return
+        }
+        guard let map=browser.linkMap else {say(LinkMapLibrary.missingMap(project:browser.linkMapProject,for:"Category questions"));return}
+        guard map.hasCategories else {
+            say("This link map was built without the categorylinks table, so it has no categories. Download that table under Packages, then build the map again.");return
+        }
+        if let name=step.title {
+            guard let category=map.category(name) else {say("There's no category called “\(name)” with articles in it in \(map.sourceName).");return}
+            let members=await Task.detached {map.membersByPopularity(category)}.value
+            let prefix=browser.currentArticleID?.path.hasPrefix("A/") == true ? "A/" : ""
+            let hits=try await map.hits(members,in:source,prefix:prefix)
+            try checkpoint(token)
+            let line=say(map.categoryAnswer(category,members:members,list:step.measure == "list"))
+            if local {amend(line,trail:"understood instantly")}
+            if !hits.isEmpty,let index=lines.firstIndex(where:{$0.id == line}) {
+                lines[index].library=LibraryLine(hits:hits,matchingArticles:members.count,query:nil,canContinue:false,counted:false)
+            }
+            return
+        }
+        let found:Int32?,name:String
+        if let from=step.from,!ConnectionEngine.isOpenArticle(from) {
+            found=try await map.node(named:from,source:source);name=from
+        } else {
+            guard let id=browser.currentArticleID else {say("Open an article first, or name one: “what categories is Ray Charles in?”");return}
+            found=map.node(id.path) ?? map.node(browser.title);name=browser.title
+        }
+        guard let node=found else {say("“\(name)” isn't in \(map.sourceName). It may be newer than the dump.");return}
+        try checkpoint(token)
+        let line=say(map.categoriesAnswer(of:node))
+        if local {amend(line,trail:"understood instantly")}
     }
 
     /// Walks a chain from its first article: in each one the spider goes to the link that leads on,

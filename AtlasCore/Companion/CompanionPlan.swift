@@ -4,7 +4,7 @@ import Foundation
 /// action needs; everything is validated and executed by Atlas itself.
 public struct CompanionStep:Codable,Sendable,Equatable {
     /// count, list, highlight, goto, clear, show, go, follow, open, back,
-    /// hunt, explore, wander, pause, resume, stop, speed, rule, read, library, connect
+    /// hunt, explore, wander, pause, resume, stop, speed, rule, read, library, connect, category
     public var action:String
     /// What to look for (count, list, highlight, goto).
     public var query:PageQuery?
@@ -20,9 +20,10 @@ public struct CompanionStep:Codable,Sendable,Equatable {
     public var result:String?
     /// A section heading, link text or "top"/"bottom" (go, follow, rule avoid).
     public var place:String?
-    /// An article title (open; connect: the article to reach).
+    /// An article title (open; connect: the article to reach; category: the category).
     public var title:String?
-    /// connect: the article to start from; omitted for the open article.
+    /// connect: the article to start from; category without a title: the article whose
+    /// categories to list. Omitted for the open article.
     public var from:String?
     /// An exact phrase to hunt for using only local perception (hunt).
     public var phrase:String?
@@ -38,6 +39,7 @@ public struct CompanionStep:Codable,Sendable,Equatable {
     /// titles (the articles in `titles`), search (the best results for `topic`).
     public var scope:String?
     /// library: articles (how many contain a match), total (all matches added up), list (which articles).
+    /// category: articles (how many are in it) or list.
     public var measure:String?
     /// library: article titles for the titles scope.
     public var titles:[String]?
@@ -77,7 +79,7 @@ public struct CompanionStep:Codable,Sendable,Equatable {
         path=c.lenientString(.path)
     }
 
-    public static let actions=["count","list","highlight","goto","clear","show","go","follow","open","back","hunt","explore","wander","pause","resume","stop","speed","rule","read","library","connect"]
+    public static let actions=["count","list","highlight","goto","clear","show","go","follow","open","back","hunt","explore","wander","pause","resume","stop","speed","rule","read","library","connect","category"]
     static let queryActions:Set<String>=["count","list","highlight","goto"]
 
     /// Maps synonyms a model might use onto the executable action names.
@@ -127,6 +129,9 @@ public struct CompanionStep:Codable,Sendable,Equatable {
                 step.title=titles.last
                 if step.from == nil,titles.count>1 {step.from=titles.first}
             }
+        case "category","categories","incategory","categorymembers","membersof","categoriesof","whatcategories","articlecategories","listcategories","categorycount":
+            step.action="category"
+            if let title=step.title {step.title=Self.categoryName(title)}
         case "answer","reply","say","chat","respond","talk","none","noop","nothing","": return nil
         default: step.action=raw
         }
@@ -136,6 +141,12 @@ public struct CompanionStep:Codable,Sendable,Equatable {
             step.action="library"
         }
         return step
+    }
+
+    /// "Category:Jazz pianists" → "Jazz pianists".
+    static func categoryName(_ raw:String)->String {
+        let name=raw.trimmingCharacters(in:.whitespacesAndNewlines)
+        return name.lowercased().hasPrefix("category:") ? String(name.dropFirst("category:".count)).trimmingCharacters(in:.whitespaces) : name
     }
 
     static func normalizeSpeed(_ raw:String)->String {
@@ -201,6 +212,7 @@ public struct CompanionStep:Codable,Sendable,Equatable {
         case "follow": if place == nil {issues.append("follow needs the link text in place")}
         case "open": if title == nil && path == nil {issues.append("open needs an article title")}
         case "connect": if title == nil && result != "more" {issues.append("connect needs the article to reach in title")}
+        case "category": if let measure,!["articles","list"].contains(measure) {issues.append("category measure must be articles or list")}
         case "hunt": if phrase == nil {issues.append("hunt needs a phrase")}
         case "explore": if topic == nil {issues.append("explore needs a topic")}
         case "speed": if !["faster","slower","normal"].contains(speed ?? "") {issues.append("speed must be faster, slower or normal")}

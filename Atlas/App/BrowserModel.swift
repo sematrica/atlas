@@ -28,6 +28,10 @@ final class BrowserModel {
     }
     var record: PackageRecord?
     var provider: (any ArticleProvider)?
+    /// Wikipedia's link map for the open package's wiki, once one is built under Packages.
+    var linkMap: LinkMap?
+    /// The open package's Wikimedia project ("enwiki"); nil when it isn't a Wikipedia.
+    var linkMapProject: String?
     /// Kept so library questions can open the Research text index for this package.
     @ObservationIgnored private var access: LibraryAccess?
     @ObservationIgnored private var textIndex: ResearchStore?
@@ -51,6 +55,8 @@ final class BrowserModel {
         let main=try await provider.info()
         guard session == sessionID else { return }
         self.provider=provider; self.record=record; self.access=access
+        linkMapProject=LinkMapLibrary.project(for:record.package)
+        await loadLinkMap()
         let web=try await OfflineWebFactory.make(provider:provider,host:record.package.storageKey,model:self)
         guard session == sessionID else { return }
         webView=web; title=main.title
@@ -59,8 +65,19 @@ final class BrowserModel {
     func close() {
         crawler.stop();crawler.ready=false;pendingCitation=nil
         searchTask?.cancel(); webView?.navigationDelegate=nil; webView?.stopLoading(); webView?.configuration.userContentController.removeAllScriptMessageHandlers()
-        webView=nil; provider=nil; record=nil; access=nil; textIndex=nil; results=[]; headings=[]; message=nil; query=""; title="Offline library"
+        webView=nil; provider=nil; record=nil; access=nil; textIndex=nil; linkMap=nil; linkMapProject=nil; results=[]; headings=[]; message=nil; query=""; title="Offline library"
         canGoBack=false; canGoForward=false; loading=false; searching=false; sessionID=UUID()
+    }
+    /// Opens the newest link map built for the open package's wiki (again after a build or delete).
+    func loadLinkMap() async {
+        guard let access,let project=linkMapProject else { linkMap=nil; return }
+        let session=sessionID
+        let map=await Task.detached { () -> LinkMap? in
+            guard let indexes=try? access.file("indexes") else { return nil }
+            return LinkMapLibrary.open(project:project,in:indexes)
+        }.value
+        guard session == sessionID else { return }
+        linkMap=map
     }
     /// The Research text index for the open package (opened on first use), or nil.
     func libraryTextIndex() async -> ResearchStore? {

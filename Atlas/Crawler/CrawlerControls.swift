@@ -375,7 +375,7 @@ struct LibraryHitList:View {
                         ThreadNode(kind:.star,size:5)
                         Text(hit.title).lineLimit(1)
                         Spacer(minLength:8)
-                        Text(hit.count.formatted()).font(.system(size:11,design:.monospaced)).foregroundStyle(Constellation.dim)
+                        if library.counted {Text(hit.count.formatted()).font(.system(size:11,design:.monospaced)).foregroundStyle(Constellation.dim)}
                         Image(systemName:"arrow.up.right").font(.system(size:9,weight:.semibold)).foregroundStyle(Constellation.core)
                     }
                     .font(.system(size:12)).foregroundStyle(.white.opacity(0.86))
@@ -384,18 +384,19 @@ struct LibraryHitList:View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help(hit.sample.map {"Open and highlight · “\($0)”"} ?? "Open and highlight the matches")
+                .help(library.query == nil ? "Open “\(hit.title)”" : hit.sample.map {"Open and highlight · “\($0)”"} ?? "Open and highlight the matches")
             }
             HStack(spacing:14) {
                 if library.hits.count>6 {Button(expanded ? "Show fewer" : "Show all \(library.hits.count)",action:toggle)}
                 if library.matchingArticles>library.hits.count {
-                    Text("top \(library.hits.count) of \(library.matchingArticles.formatted())").foregroundStyle(Constellation.faint)
+                    Text(library.counted ? "top \(library.hits.count) of \(library.matchingArticles.formatted())" : "\(library.hits.count) shown of \(library.matchingArticles.formatted())")
+                        .foregroundStyle(Constellation.faint)
                 }
                 Button("Copy list") {
-                    let text=library.hits.map {"\($0.title)\t\($0.count)"}.joined(separator:"\n")
+                    let text=library.hits.map {library.counted ? "\($0.title)\t\($0.count)" : $0.title}.joined(separator:"\n")
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(text,forType:.string)
-                }.help("Copy the titles and counts, one per line")
+                }.help(library.counted ? "Copy the titles and counts, one per line" : "Copy the titles, one per line")
             }
             .font(.system(size:10)).buttonStyle(.plain).foregroundStyle(Constellation.core)
         }
@@ -545,7 +546,7 @@ struct ConnectionPoster:View {
     let connection:ConnectionLine
     var summary:String {
         let steps=connection.chain.count-1
-        return "\(steps) link\(steps == 1 ? "" : "s") · "+(connection.proven ? "the shortest chain" : "the shortest found so far")
+        return "\(steps) link\(steps == 1 ? "" : "s") · "+(connection.mapped ? "the shortest chain in Wikipedia's link map" : connection.proven ? "the shortest chain" : "the shortest found so far")
     }
     var body:some View {
         VStack(alignment:.leading,spacing:14) {

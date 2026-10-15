@@ -174,3 +174,100 @@ final class ArticleConnectionTests:XCTestCase {
         } catch {XCTAssertTrue(error.localizedDescription.contains("couldn't find an article called “Atlantis”"))}
     }
 }
+
+/// Connect the dots with a link map built from Wikipedia's table dumps: the chain comes from the
+/// map, and each of its links is checked on the package's pages.
+final class ConnectionLinkMapTests:XCTestCase {
+    var fixture:DumpFixture!
+    override func setUpWithError() throws {fixture=try DumpFixture()}
+    override func tearDown() {fixture.remove()}
+
+    func connect(_ library:FakeLibrary,map:LinkMap,to:String) async throws -> ConnectionRun {
+        let run=try await ConnectionEngine.start(from:"Ray Charles",to:to,current:nil,packageID:"pkg",source:library,index:nil,linkMap:map)
+        return try await ConnectionEngine.advance(run,source:library,concurrency:2)
+    }
+
+    func testTheChainComesFromTheMapAndIsCheckedOnThePages() async throws {
+        let library=ArticleConnectionTests.library([
+            "Ray_Charles":("Ray Charles","A singer.",["Atlantic_Records","Georgia"]),
+            "Atlantic_Records":("Atlantic Records","A label.",["New_York_City"]),
+            "Georgia":("Georgia","A state.",[]),
+            "New_York_City":("New York City","A city.",["French_capital"]),
+            "Paris":("Paris","A city.",[])
+        ],redirects:["French_capital":"Paris"])
+        let map=try fixture.linkMap(["Ray_Charles":["Atlantic_Records","Georgia"],"Atlantic_Records":["New_York_City"],"New_York_City":["French_capital"]],
+                                    redirects:["French_capital":"Paris"])
+        let run=try await connect(library,map:map,to:"Paris")
+        XCTAssertEqual(run.chain?.map(\.title),["Ray Charles","Atlantic Records","New York City","Paris"])
+        XCTAssertEqual(run.chain?.last?.via,"French_capital","the link as the page writes it, for the spider")
+        XCTAssertEqual(run.read,3,"only the articles on the chain are read")
+        XCTAssertEqual(run.mapSource,"Wikipedia's link map (2026-10-01)")
+        XCTAssertTrue(run.isComplete)
+        XCTAssertTrue(run.answer.hasSuffix("3 links. That's the shortest chain in Wikipedia's link map (2026-10-01), and every link in it is on these pages."),run.answer)
+    }
+
+    func testGoesAroundLinksThePagesDontHave() async throws {
+        let library=ArticleConnectionTests.library([
+            "Ray_Charles":("Ray Charles","A singer.",["Jazz","Atlantic_Records"]),
+            "Jazz":("Jazz","Music.",[]),
+            "Atlantic_Records":("Atlantic Records","A label.",["New_York_City"]),
+            "New_York_City":("New York City","A city.",["Paris"]),
+            "Paris":("Paris","A city.",[])
+        ])
+        // The map says Jazz links to Paris; this package's Jazz page doesn't.
+        let map=try fixture.linkMap(["Ray_Charles":["Jazz","Atlantic_Records"],"Jazz":["Paris"],"Atlantic_Records":["New_York_City"],"New_York_City":["Paris"]])
+        let run=try await connect(library,map:map,to:"Paris")
+        XCTAssertEqual(run.chain?.map(\.title),["Ray Charles","Atlantic Records","New York City","Paris"])
+        XCTAssertEqual(run.mapDetours,1)
+        XCTAssertTrue(run.answer.contains("going around 1 link the map has that these pages don't"),run.answer)
+    }
+
+    func testAvoidsArticlesThePackageLacks() async throws {
+        let library=ArticleConnectionTests.library([
+            "Ray_Charles":("Ray Charles","A singer.",["Atlantic_Records"]),
+            "Atlantic_Records":("Atlantic Records","A label.",["New_York_City"]),
+            "New_York_City":("New York City","A city.",["Paris"]),
+            "Paris":("Paris","A city.",[])
+        ])
+        let map=try fixture.linkMap(["Ray_Charles":["Missing_article","Atlantic_Records"],"Missing_article":["Paris"],
+                                     "Atlantic_Records":["New_York_City"],"New_York_City":["Paris"]])
+        let run=try await connect(library,map:map,to:"Paris")
+        XCTAssertEqual(run.chain?.map(\.title),["Ray Charles","Atlantic Records","New York City","Paris"])
+        XCTAssertEqual(run.mapDetours,1)
+    }
+
+    func testReadsOutwardWhenTheMapCantHelp() async throws {
+        let library=ArticleConnectionTests.library([
+            "Ray_Charles":("Ray Charles","A singer.",["Atlantic_Records"]),
+            "Atlantic_Records":("Atlantic Records","A label.",["Sematrica"]),
+            "Sematrica":("Sematrica","An app.",[]),
+            "Paris":("Paris","A city.",[])
+        ])
+        // A newer article than the dump: the map doesn't know it.
+        let map=try fixture.linkMap(["Ray_Charles":["Atlantic_Records"]])
+        let newer=try await connect(library,map:map,to:"Sematrica")
+        XCTAssertEqual(newer.chain?.map(\.title),["Ray Charles","Atlantic Records","Sematrica"])
+        XCTAssertNil(newer.mapSource)
+        XCTAssertTrue(newer.proven)
+
+        // The map's only route runs through an article the package lacks.
+        let other=try fixture.linkMap(["Ray_Charles":["Ghost"],"Ghost":["Sematrica"]],project:"simplewiki")
+        let fallback=try await connect(library,map:other,to:"Sematrica")
+        XCTAssertEqual(fallback.chain?.map(\.title),["Ray Charles","Atlantic Records","Sematrica"])
+        XCTAssertNil(fallback.mapSource)
+    }
+
+    func testNoChainInTheMap() async throws {
+        let library=ArticleConnectionTests.library([
+            "Ray_Charles":("Ray Charles","A singer.",["Atlantic_Records"]),
+            "Atlantic_Records":("Atlantic Records","A label.",[]),
+            "Isolated":("Isolated","Nothing links here.",[])
+        ])
+        let map=try fixture.linkMap(["Ray_Charles":["Atlantic_Records"],"Isolated":[]])
+        let run=try await connect(library,map:map,to:"Isolated")
+        XCTAssertNil(run.chain)
+        XCTAssertTrue(run.exhausted)
+        XCTAssertEqual(run.read,0)
+        XCTAssertEqual(run.answer,"There's no chain of 10 links or fewer from Ray Charles to Isolated in Wikipedia's link map (2026-10-01).")
+    }
+}

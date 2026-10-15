@@ -64,6 +64,8 @@ public enum CompanionPlanner {
     read: read the whole article before answering "question" (summaries, opinions, anything the excerpts can't answer).
     library: count or find across many articles, exactly. "query" = what to look for in each article. "measure" = articles (how many articles contain it) | total (how many times altogether) | list (which articles). "scope" = library (every article; the default) | linked (articles this article links to; "place" = only links in that section) | titles (the articles named in "titles") | search (the best articles about "topic"). "articles" = at most that many from the scope. "result":"more" continues the last library question where it stopped.
     connect: find the shortest chain of links from one article to another, then walk it with the spider. "title" = the article to reach; "from" = where to start (omit for the open article). "result":"more" keeps looking when the last search stopped early.
+    category: Wikipedia categories. "title" = a category, with "measure" = articles (how many are in it) | list (which). Without "title": the categories an article is in ("from" = that article; omit for the open article).
+    "What links here" is a library list with linksTo "this article".
 
     QUERY (omit fields you don't need)
     unit: word | letter | character | number | sentence | paragraph | heading | link | image | name | phrase
@@ -107,6 +109,12 @@ public enum CompanionPlanner {
     {"steps":[{"action":"connect","from":"Ray Charles","title":"Paris"}],"reply":"Let me find the trail of links between them."}
     User: how do I get from here to the Moon?
     {"steps":[{"action":"connect","title":"Moon"}],"reply":"Looking for the shortest path."}
+    User: what links here?
+    {"steps":[{"action":"library","measure":"list","query":{"unit":"link","linksTo":"this article"}}],"reply":"Let me see who links to this article."}
+    User: how many articles are in the Jazz pianists category?
+    {"steps":[{"action":"category","title":"Jazz pianists","measure":"articles"}],"reply":"Checking the category."}
+    User: what categories is this in?
+    {"steps":[{"action":"category"}],"reply":"Here are its categories."}
     User: open the article on Paris and count its links
     {"steps":[{"action":"open","title":"Paris"},{"action":"count","query":{"unit":"link"}}],"reply":"Opening Paris first."}
     User: when was he born?
@@ -134,7 +142,7 @@ public enum CompanionPlanner {
     """
 
     static let noArticle="""
-    NO ARTICLE IS OPEN. Page actions (count, list, highlight, goto, go, follow, hunt, wander, read) can't run. You can chat, answer from general knowledge (say it isn't from the library), open an article by title, or connect two articles named with "from" and "title".
+    NO ARTICLE IS OPEN. Page actions (count, list, highlight, goto, go, follow, hunt, wander, read) can't run. You can chat, answer from general knowledge (say it isn't from the library), open an article by title, connect two articles named with "from" and "title", or answer category questions that name the category or article.
     """
 
     public static func messages(request:String,context:CompanionPromptContext,history:[AIMessage])->[AIMessage] {

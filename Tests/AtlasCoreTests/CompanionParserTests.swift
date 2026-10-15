@@ -298,3 +298,61 @@ final class ConnectParserTests:XCTestCase {
         XCTAssertTrue(CompanionPlan.schemaJSON.contains("\"connect\""))
     }
 }
+
+final class LinkMapParserTests:XCTestCase {
+    private func step(_ request:String,file:StaticString=#filePath,line:UInt=#line)->CompanionStep? {
+        let plan=CompanionLocalParser.parse(request)
+        XCTAssertEqual(plan?.local,true,"“\(request)” should be understood instantly",file:file,line:line)
+        return plan?.steps.first
+    }
+
+    func testWhatLinksHere() {
+        for (request,measure) in [("what links here","list"),("What links here?","list"),("which articles link here","list"),("how many articles link here","articles"),
+                                  ("which pages link to this article","list"),("what links to this page","list")] {
+            let found=step(request)
+            XCTAssertEqual(found?.action,"library",request)
+            XCTAssertEqual(found?.measure,measure,request)
+            XCTAssertEqual(found?.query?.linksTo.map {ConnectionEngine.isOpenArticle($0)},true,request)
+            XCTAssertEqual(found?.libraryRequest?.linksHereTarget.map {ConnectionEngine.isOpenArticle($0)},true,request)
+        }
+        XCTAssertEqual(step("which articles link to Paris")?.libraryRequest?.linksHereTarget,"Paris")
+    }
+
+    func testArticlesInACategory() {
+        for (request,measure) in [("how many articles are in the category Jazz pianists","articles"),("How many pages are there in Category:Jazz pianists?","articles"),
+                                  ("how many articles does the Jazz pianists category have","articles"),("which articles are in the category Jazz pianists","list"),
+                                  ("list the articles in the Jazz pianists category","list"),("what's in Category:Jazz pianists","list"),
+                                  ("show me all pages in category Jazz pianists","list"),("which articles belong to the category \"Jazz pianists\"","list")] {
+            let found=step(request)
+            XCTAssertEqual(found?.action,"category",request)
+            XCTAssertEqual(found?.title,"Jazz pianists",request)
+            XCTAssertEqual(found?.measure,measure,request)
+            XCTAssertTrue(found?.problems.isEmpty == true,request)
+        }
+    }
+
+    func testCategoriesOfAnArticle() {
+        for request in ["what categories is this article in","What categories is this in?","which categories is it in","list the categories",
+                        "what are the categories of this article","what categories does this page belong to"] {
+            let found=step(request)
+            XCTAssertEqual(found?.action,"category",request)
+            XCTAssertNil(found?.title,request)
+            XCTAssertNil(found?.from,request)
+        }
+        for request in ["what categories is Ray Charles in","what categories does Ray Charles belong to","list the categories of Ray Charles"] {
+            let found=step(request)
+            XCTAssertEqual(found?.action,"category",request)
+            XCTAssertEqual(found?.from,"Ray Charles",request)
+        }
+    }
+
+    func testOtherQuestionsAreNotCategoryQuestions() {
+        XCTAssertEqual(CompanionLocalParser.parse("how many articles mention Atlantic Records")?.steps.first?.action,"library")
+        XCTAssertEqual(CompanionLocalParser.parse("which articles link to Paris")?.steps.first?.action,"library")
+        XCTAssertNil(CompanionLocalParser.parse("which category has the most articles"))
+        XCTAssertNil(CompanionLocalParser.parse("how many articles are in the library"))
+        var model=CompanionStep(action:"categories");model.title="Category:Jazz pianists"
+        XCTAssertEqual(model.normalized()?.action,"category")
+        XCTAssertEqual(model.normalized()?.title,"Jazz pianists")
+    }
+}
