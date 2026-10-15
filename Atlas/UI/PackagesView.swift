@@ -5,7 +5,10 @@ import AtlasCore
 
 struct PackagesView: View {
     @Bindable var model: PackageLibraryModel
-    @State private var section="Available"
+    private var section: String {
+        get { model.packagesSection }
+        nonmutating set { model.packagesSection = newValue }
+    }
     @State private var deleting: PackageRecord?
     @State private var deletingMap: BuiltLinkMap?
     var body: some View {
@@ -17,7 +20,7 @@ struct PackagesView: View {
                 Button("Import ZIM File…",action:chooseZIM).disabled(!model.storageAvailable || model.importing)
                     .help("Add a .zim file you already have: one you made, or downloaded elsewhere")
             }
-            Picker("Packages",selection:$section) {
+            Picker("Packages",selection:$model.packagesSection) {
                 Text("Available").tag("Available")
                 Text("Downloading (\(model.pending.count))").tag("Downloading")
                 Text("Installed (\(model.installed.count))").tag("Installed")
@@ -94,6 +97,7 @@ struct PackagesView: View {
                                 ProgressView("Verifying \(Int(fraction*100))%",value:fraction)
                             } else { ProgressView("Verifying package…").controlSize(.small) }
                         }
+                        if let note=record.package.archiveNote { Text(note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true) }
                         if let message=record.message { Text(message).font(.caption).foregroundStyle(.secondary) }
                         Text((model.rootPath.map {$0+"/"} ?? "Library: ")+record.relativePath)
                             .font(.caption2.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)

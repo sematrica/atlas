@@ -64,7 +64,18 @@ public struct WikipediaPackage: Identifiable, Codable, Equatable, Sendable {
     public var category: String?
     public var language: String { Locale.current.localizedString(forLanguageCode: languageCode) ?? languageCode }
     public var storageKey: String { SHA256.hash(data: Data(id.utf8)).map { String(format: "%02x", $0) }.joined() }
-    public var capabilities: String { format == .zim ? "Browsable · Title search" : "Archive only" }
+    public var capabilities: String {
+        if format == .zim { return "Browsable · Title search" }
+        return isLinkMapTable ? "Not readable · Builds the link map" : "Not readable · Stored as a dataset"
+    }
+    /// One of the Wikipedia database tables a link map is built from.
+    public var isLinkMapTable: Bool { format == .archive && LinkMapLibrary.dumpTable(name) != nil }
+    /// What an archive is for, in a sentence; nil for readable packages.
+    public var archiveNote: String? {
+        guard format == .archive else { return nil }
+        if isLinkMapTable { return "A Wikipedia database table, not articles: it can't be opened in Browse. Build it into a link map under Installed → Link maps, then open a Wikipedia ZIM package in the same language." }
+        return "Raw Wikimedia data, not articles: Sematrica can't open it in Browse, and keeps it as a dataset. To read Wikipedia, download a ZIM package from the Kiwix library."
+    }
     public init(id: String, name: String, languageCode: String, kind: PackageKind, summary: String, version: String,
                 downloadURL: URL, downloadBytes: Int64, checksum: PackageChecksum? = nil, format: PackageFormat,
                 source: String, family: String, category: String? = nil) {

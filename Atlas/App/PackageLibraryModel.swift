@@ -31,6 +31,8 @@ final class PackageLibraryModel {
     var collection = "wikipedia"
     var collections = KiwixCollection.defaults
     var importing=false
+    /// The Packages tab shown in Library: Available, Downloading or Installed.
+    var packagesSection = "Available"
     var dumpProject = "enwiki"
     var loadingCatalog=false
     var busyPackages: Set<String> = []
@@ -70,6 +72,16 @@ final class PackageLibraryModel {
     var languages: [String] { Array(Set(catalog.map(\.languageCode))).sorted() }
     var filteredCatalog: [WikipediaPackage] { catalog.filter { language.isEmpty || $0.languageCode == language } }
     var installed: [PackageRecord] { records.filter {$0.state == .installed || $0.state == .corrupted} }
+    /// Installed packages Browse can open.
+    var readable: [PackageRecord] { installed.filter {$0.package.format == .zim && $0.state == .installed} }
+    /// Installed Wikimedia archives: data tables, not articles.
+    var archives: [PackageRecord] { installed.filter {$0.package.format == .archive} }
+    /// Shows the Kiwix library's Wikipedia packages in Packages → Available.
+    func showReadablePackages() {
+        packagesSection = "Available"
+        if catalogSource != "Kiwix" || collection != "wikipedia" { catalogSource = "Kiwix"; collection = "wikipedia"; language = "eng"; catalog = [] }
+        if catalog.isEmpty { Task { await loadCatalog() } }
+    }
     /// Downloaded table dumps, grouped into the sets a link map is built from.
     var dumpSets: [LinkMapLibrary.DumpSet] { LinkMapLibrary.dumpSets(records) }
     /// The newest dump's link map tables in the loaded Wikimedia catalog.

@@ -61,7 +61,8 @@ struct ContentView: View {
                 if current == .library {
                     LibraryView(model: library)
                 } else if current == .browse || current == .search || current == .crawl {
-                    BrowserView(library: library.packages, browser: library.packages.browser, emphasizeSearch: current == .search, emphasizeCrawl: current == .crawl)
+                    BrowserView(library: library.packages, browser: library.packages.browser, emphasizeSearch: current == .search, emphasizeCrawl: current == .crawl,
+                                showLibrary: { destination = .library })
                 } else if current == .research {
                     ResearchView(research:library.packages.research,ai:library.packages.intelligence,browser:library.packages.browser,openSource:{passage in library.packages.browser.openCitation(passage);destination = .browse})
                 } else if current == .ask {

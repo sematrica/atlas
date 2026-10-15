@@ -364,6 +364,17 @@ final class LinkMapAnswerTests:XCTestCase {
         XCTAssertEqual(sets.first?.readableDate,"2026-10-01")
         records.removeAll {$0.package.name.hasSuffix("-redirect.sql.gz")}
         XCTAssertEqual(LinkMapLibrary.dumpSets(records).first?.missing,["redirect"])
+
+        // Archives say they can't be read, and what they're for.
+        let table=catalog.first {$0.name == "enwiki-20261001-pagelinks.sql.gz"}!,other=catalog.first {$0.name == "enwiki-20261001-abstract.xml.gz"}!
+        XCTAssertTrue(table.isLinkMapTable)
+        XCTAssertFalse(other.isLinkMapTable)
+        XCTAssertEqual(table.capabilities,"Not readable · Builds the link map")
+        XCTAssertEqual(other.capabilities,"Not readable · Stored as a dataset")
+        XCTAssertTrue(table.archiveNote?.contains("Link maps") == true)
+        XCTAssertTrue(other.archiveNote?.contains("ZIM package") == true)
+        let rows=try PackageCatalog.parseWikimedia(Data(#"{"jobs":{"pagelinkstable":{"status":"done","files":{"enwiki-20261001-pagelinks.sql.gz":{"size":5,"url":"/enwiki/20261001/enwiki-20261001-pagelinks.sql.gz","sha1":"da39a3ee5e6b4b0d3255bfef95601890afd80709"}}}}}"#.utf8),project:"enwiki",date:"20261001")
+        XCTAssertTrue(rows.first?.summary.contains("link map") == true)
     }
 
     func testInstalledMapsAndPlainLinkQuestions() throws {

@@ -145,7 +145,9 @@ public actor PackageCatalog {
                 let checksum=file.sha1.map {PackageChecksum(algorithm:.sha1,value:$0)} ?? file.md5.map {PackageChecksum(algorithm:.md5,value:$0)}
                 return WikipediaPackage(id:"wikimedia:"+name,name:name,languageCode:String(project.dropLast(4)),
                                         kind:name.contains("history") ? .historicalArchive : .rawDump,
-                                        summary:"Official Wikimedia dataset. Stored as an archive; not browsable.", version:date,
+                                        summary:LinkMapLibrary.dumpTable(name) != nil
+                                            ? "One of Wikipedia's database tables. Not readable on its own: Sematrica builds it into a link map for Connect the dots, “what links here” and categories."
+                                            : "Official Wikimedia dataset. Stored as an archive; not readable in Browse.", version:date,
                                         downloadURL:url,downloadBytes:size,checksum:checksum,format:.archive,source:"Wikimedia",
                                         family:name.replacingOccurrences(of:date,with:"snapshot"))
             }

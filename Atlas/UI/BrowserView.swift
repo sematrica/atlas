@@ -6,6 +6,8 @@ struct BrowserView: View {
     @Bindable var browser: BrowserModel
     var emphasizeSearch=false
     var emphasizeCrawl=false
+    /// Shows Library (Packages), where downloads, archives and link maps live.
+    var showLibrary: () -> Void = {}
     @State private var showCrawler=true
     @State private var showSearch=false
 
@@ -18,8 +20,21 @@ struct BrowserView: View {
                     Button(action:browser.back) { Image(systemName:"chevron.left") }.disabled(!browser.canGoBack).help("Back")
                     Button(action:browser.forward) { Image(systemName:"chevron.right") }.disabled(!browser.canGoForward).help("Forward")
                     Menu {
-                        ForEach(library.installed.filter {$0.package.format == .zim && $0.state == .installed}) { record in
+                        ForEach(library.readable) { record in
                             Button("\(record.package.language) · \(record.package.name) · \(record.package.version)") { Task { await library.open(record) } }
+                        }
+                        if library.readable.isEmpty { Text("No readable packages yet") }
+                        if !library.archives.isEmpty {
+                            Divider()
+                            // Wikimedia archives are data tables: they can't be opened, so say what they're for.
+                            Section("\(library.archives.count) Wikimedia archive\(library.archives.count == 1 ? "" : "s") (.gz): data, not articles") {
+                                if !library.dumpSets.isEmpty { Button("Build a Link Map from Them…") { library.packagesSection="Installed"; showLibrary() } }
+                                Button("Show Them in Packages") { library.packagesSection="Installed"; showLibrary() }
+                            }
+                        }
+                        if library.readable.isEmpty {
+                            Divider()
+                            Button("Get a Wikipedia Package…") { library.showReadablePackages(); showLibrary() }
                         }
                     } label: { Label(browser.record?.package.name ?? "Open a package",systemImage:"book") }
                     Button {showCrawler.toggle()} label: {CompanionToolbarLabel(active:showCrawler || emphasizeCrawl,busy:browser.crawler.conversation.busy)}
@@ -81,6 +96,16 @@ struct BrowserView: View {
                         OfflineWebView(webView:web,crawler:browser.crawler).id(browser.sessionID).frame(minWidth:350,maxWidth:.infinity,maxHeight:.infinity)
                     }
                     .frame(width:area.size.width,height:area.size.height)
+                    }
+                } else if library.storageAvailable && library.readable.isEmpty && !library.archives.isEmpty {
+                    // Only Wikimedia archives are installed: explain why there's nothing to open.
+                    ContentUnavailableView {
+                        Label("Nothing to read yet",systemImage:"book.closed")
+                    } description: {
+                        Text("The .gz files you downloaded from Wikimedia archives are database tables, not articles, so Browse can't open them. To read, download a ZIM package from the Kiwix library."+(library.dumpSets.isEmpty ? "" : " Your Wikipedia tables can then be built into a link map, which makes Connect the dots, “what links here” and category questions exact and fast in that package."))
+                    } actions: {
+                        Button("Get a Wikipedia Package") { library.showReadablePackages(); showLibrary() }.buttonStyle(.borderedProminent)
+                        if !library.dumpSets.isEmpty { Button("Build the Link Map") { library.packagesSection="Installed"; showLibrary() } }
                     }
                 } else {
                     ContentUnavailableView("Open your offline library",systemImage:"book.closed",
