@@ -13,7 +13,11 @@ final class BrowserModel {
         guard let record,let url=webView?.url else {return nil}
         return ArticleID(packageID:record.id,path:String(url.path.dropFirst()))
     }
-    init() {crawler.intelligence.browser=self}
+    init() {
+        visitedGraph=UserDefaults.standard.data(forKey:Self.visitsKey)
+            .flatMap {try? JSONDecoder().decode(VisitedArticleGraph.self,from:$0)} ?? VisitedArticleGraph()
+        crawler.intelligence.browser=self
+    }
     func openCitation(_ passage:RetrievedPassage) {
         guard record?.id == passage.article.packageID else {message="Open the source package first.";return}
         pendingCitation=passage;navigate(passage.article.path)
@@ -66,8 +70,10 @@ final class BrowserModel {
     var canGoForward=false
     var searching=false
     var loading=false
+    var visitedGraph:VisitedArticleGraph
     var sessionID=UUID()
     private var searchTask: Task<Void,Never>?
+    private static let visitsKey="SematricaVisitedArticles.v1"
     func open(record: PackageRecord,access: LibraryAccess) async throws {
         close()
         let session=sessionID
@@ -87,6 +93,45 @@ final class BrowserModel {
         searchTask?.cancel(); webView?.navigationDelegate=nil; webView?.stopLoading(); webView?.configuration.userContentController.removeAllScriptMessageHandlers()
         webView=nil; provider=nil; record=nil; access=nil; textIndex=nil; linkMap=nil; linkMapProject=nil; results=[]; headings=[]; message=nil; query=""; title="Offline library"
         canGoBack=false; canGoForward=false; loading=false; searching=false; sessionID=UUID()
+    }
+    /// Record only completed local article navigations. Links are captured from
+    /// that page so the visit board works even without Wikipedia's optional map.
+    func recordVisit(in web:WKWebView) async {
+        guard webView === web,let record,let url=web.url,url.scheme == "atlas",
+              url.host == record.package.storageKey else {return}
+        let path=String(url.path.dropFirst()),session=sessionID
+        let pageTitle=(web.title ?? title).trimmingCharacters(in:.whitespacesAndNewlines)
+        guard !path.isEmpty,!pageTitle.isEmpty,pageTitle != "Article unavailable" else {return}
+        let raw=(try? await web.callAsyncJavaScript("""
+            return [...document.querySelectorAll('a[href]')].filter(a=>{
+              if(a.closest('nav,footer,[hidden]'))return false;
+              const s=getComputedStyle(a);return s.display!=='none'&&s.visibility!=='hidden'&&a.getClientRects().length>0;
+            }).slice(0,30000).map(a=>a.href);
+            """,arguments:[:],in:nil,contentWorld:.defaultClient)) as? [String] ?? []
+        var paths=Set<String>()
+        for href in raw {
+            guard let target=URL(string:href,relativeTo:url)?.absoluteURL else {continue}
+            if target.scheme == "atlas",target.host == url.host {paths.insert(String(target.path.dropFirst()))}
+            else if let local=OfflineURL.localWikipediaPath(target) {paths.insert(local)}
+        }
+        if let map=linkMap,let node=map.node(path) ?? map.node(pageTitle) {
+            for target in map.links(from:node) {paths.insert("A/"+map.title(target))}
+        }
+        guard session == sessionID,webView === web else {return}
+        visitedGraph.record(packageID:record.id,packageName:record.package.name,path:path,
+                            title:pageTitle,outgoingPaths:Array(paths))
+        if let data=try? JSONEncoder().encode(visitedGraph) {UserDefaults.standard.set(data,forKey:Self.visitsKey)}
+    }
+    func moveVisit(_ id:String,to x:Double,_ y:Double) {
+        visitedGraph.move(id,to:x,y)
+        if let data=try? JSONEncoder().encode(visitedGraph) {UserDefaults.standard.set(data,forKey:Self.visitsKey)}
+    }
+    func openVisit(_ page:VisitedArticle) {
+        if record?.id == page.packageID {navigate(page.path);return}
+        guard let other=installedPackages().first(where:{$0.id == page.packageID}) else {
+            message="That article's package is not currently available in your library.";return
+        }
+        openArticle(other,page.title)
     }
     /// Opens the newest link map built for the open package's wiki (again after a build or delete).
     func loadLinkMap() async {

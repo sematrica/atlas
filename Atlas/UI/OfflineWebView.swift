@@ -93,7 +93,11 @@ final class OfflineBrowserDelegate: NSObject, WKNavigationDelegate, WKScriptMess
         model?.loading=true; model?.headings=[]
     }
     func webView(_ webView: WKWebView,didFinish navigation: WKNavigation!) {
-        Task { [weak model] in await model?.crawler.prepare();model?.identifyCitation() }
+        Task { [weak model] in
+            await model?.crawler.prepare()
+            await model?.recordVisit(in:webView)
+            model?.identifyCitation()
+        }
         model?.loading=false; model?.title=webView.title ?? "Article"
         model?.canGoBack=webView.canGoBack; model?.canGoForward=webView.canGoForward
         // The isolated client world is the future geometry bridge. Archive scripts are disabled.
