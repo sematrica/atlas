@@ -144,6 +144,91 @@ struct BrowserView: View {
     }
 }
 
+private enum VisitBoardTheme:String,CaseIterable,Identifiable {
+    case evidence,monochrome,grafana,blueprint
+    var id:String {rawValue}
+    var name:String {
+        switch self {
+        case .evidence:"Evidence board"
+        case .monochrome:"Black & white"
+        case .grafana:"Grafana"
+        case .blueprint:"Midnight blueprint"
+        }
+    }
+    var heading:String {
+        switch self {
+        case .evidence:"THE VISIT BOARD"
+        case .monochrome:"VISITED ARTICLES"
+        case .grafana:"LINK OBSERVATORY"
+        case .blueprint:"ARTICLE BLUEPRINT"
+        }
+    }
+    var caption:String {
+        switch self {
+        case .evidence:"Every article you opened. Every thread it shares."
+        case .monochrome:"A clear map of your reading history."
+        case .grafana:"Local article traffic and shared destinations."
+        case .blueprint:"A schematic of the paths you have traced."
+        }
+    }
+    var detailHeading:String {
+        switch self {
+        case .evidence:"CASE FILE"
+        case .monochrome:"ARTICLE"
+        case .grafana:"NODE DETAILS"
+        case .blueprint:"FIELD RECORD"
+        }
+    }
+    var palette:VisitBoardPalette {
+        switch self {
+        case .evidence:
+            .init(background:Color(red:0.085,green:0.075,blue:0.073),header:Color(red:0.13,green:0.105,blue:0.09),
+                  boardTop:Color(red:0.22,green:0.18,blue:0.14),boardBottom:Color(red:0.11,green:0.105,blue:0.11),
+                  primary:Color(red:0.88,green:0.82,blue:0.66),muted:Color(red:0.70,green:0.65,blue:0.56),
+                  direct:Color(red:0.95,green:0.42,blue:0.27),shared:Color(red:0.96,green:0.68,blue:0.43),
+                  card:Color(red:0.88,green:0.82,blue:0.66),cardText:Color(red:0.19,green:0.15,blue:0.13),
+                  cardMeta:Color(red:0.42,green:0.37,blue:0.32),panel:Color(red:0.12,green:0.10,blue:0.095),
+                  edge:Color(red:0.30,green:0.24,blue:0.20))
+        case .monochrome:
+            .init(background:.white,header:.white,boardTop:Color(white:0.98),boardBottom:.white,
+                  primary:.black,muted:Color(white:0.38),direct:.black,shared:Color(white:0.55),
+                  card:.white,cardText:.black,cardMeta:Color(white:0.42),panel:.white,edge:Color(white:0.74))
+        case .grafana:
+            .init(background:Color(red:0.065,green:0.075,blue:0.10),header:Color(red:0.11,green:0.12,blue:0.15),
+                  boardTop:Color(red:0.09,green:0.105,blue:0.13),boardBottom:Color(red:0.055,green:0.07,blue:0.09),
+                  primary:Color(red:0.92,green:0.94,blue:0.96),muted:Color(red:0.57,green:0.64,blue:0.71),
+                  direct:Color(red:1.0,green:0.59,blue:0.18),shared:Color(red:0.36,green:0.80,blue:0.88),
+                  card:Color(red:0.13,green:0.15,blue:0.19),cardText:.white,
+                  cardMeta:Color(red:0.57,green:0.67,blue:0.74),panel:Color(red:0.11,green:0.13,blue:0.17),
+                  edge:Color(red:0.25,green:0.29,blue:0.34))
+        case .blueprint:
+            .init(background:Color(red:0.025,green:0.065,blue:0.12),header:Color(red:0.035,green:0.095,blue:0.16),
+                  boardTop:Color(red:0.035,green:0.11,blue:0.20),boardBottom:Color(red:0.02,green:0.07,blue:0.14),
+                  primary:Color(red:0.78,green:0.94,blue:0.98),muted:Color(red:0.43,green:0.69,blue:0.78),
+                  direct:Color(red:0.30,green:0.83,blue:0.95),shared:Color(red:1.0,green:0.78,blue:0.39),
+                  card:Color(red:0.04,green:0.15,blue:0.24),cardText:Color(red:0.86,green:0.97,blue:1.0),
+                  cardMeta:Color(red:0.48,green:0.78,blue:0.86),panel:Color(red:0.035,green:0.12,blue:0.21),
+                  edge:Color(red:0.21,green:0.50,blue:0.62))
+        }
+    }
+}
+
+private struct VisitBoardPalette {
+    let background:Color
+    let header:Color
+    let boardTop:Color
+    let boardBottom:Color
+    let primary:Color
+    let muted:Color
+    let direct:Color
+    let shared:Color
+    let card:Color
+    let cardText:Color
+    let cardMeta:Color
+    let panel:Color
+    let edge:Color
+}
+
 /// A tactile board for articles actually opened in the offline reader.
 private struct VisitedMapView:View {
     @Bindable var browser:BrowserModel
@@ -158,9 +243,12 @@ private struct VisitedMapView:View {
     @State private var pan=CGSize.zero
     @State private var settledPan=CGSize.zero
     @State private var dragged:[String:CGPoint]=[:]
-    private let paper=Color(red:0.88,green:0.82,blue:0.66)
-    private let ember=Color(red:0.95,green:0.42,blue:0.27)
-    private let thread=Color(red:0.96,green:0.68,blue:0.43)
+    @AppStorage("VisitBoardTheme") private var themeName=VisitBoardTheme.evidence.rawValue
+    private var theme:VisitBoardTheme {VisitBoardTheme(rawValue:themeName) ?? .evidence}
+    private var palette:VisitBoardPalette {theme.palette}
+    private var paper:Color {palette.primary}
+    private var ember:Color {palette.direct}
+    private var thread:Color {palette.shared}
 
     private var articles:[VisitedArticle] {
         browser.visitedGraph.articles.filter {packageFilter == "all" || $0.packageID == packageFilter}
@@ -185,9 +273,10 @@ private struct VisitedMapView:View {
                         if let a=articles.first(where:{$0.id == edge.fromID}),
                            let b=articles.first(where:{$0.id == edge.toID}),edge.isDirect || showShared {
                             let emphasized=hoveredID == a.id || hoveredID == b.id || selectedID == a.id || selectedID == b.id
-                            connectionPath(from:location(a,in:area.size),to:location(b,in:area.size),bow:edge.isDirect ? 18:-18)
-                                .stroke(edge.isDirect ? ember:thread.opacity(0.85),style:StrokeStyle(lineWidth:emphasized ? 2.5:1.35,lineCap:.round,dash:edge.isDirect ? []:[5,6]))
-                                .opacity(emphasized ? 0.95:0.55).allowsHitTesting(false)
+                            connectionPath(from:location(a,in:area.size),to:location(b,in:area.size),
+                                           bow:theme == .evidence ? (edge.isDirect ? 18:-18):0)
+                                .stroke(edge.isDirect ? ember:thread,style:StrokeStyle(lineWidth:emphasized ? 2.5:(theme == .monochrome ? 1:1.35),lineCap:.round,dash:edge.isDirect ? []:[5,6]))
+                                .opacity(emphasized ? 0.95:(theme == .monochrome ? 0.72:0.58)).allowsHitTesting(false)
                         }
                     }
                     ForEach(articles) {article in
@@ -228,42 +317,67 @@ private struct VisitedMapView:View {
             }
         }
         .frame(minWidth:900,minHeight:660)
-        .background(Color(red:0.085,green:0.075,blue:0.073))
-        .preferredColorScheme(.dark)
+        .background(palette.background)
+        .preferredColorScheme(theme == .monochrome ? .light:.dark)
         .onAppear {if packageFilter == "all",let id=browser.record?.id {packageFilter=id}}
     }
     private var header:some View {
-        HStack(spacing:18) {
-            VStack(alignment:.leading,spacing:4) {
-                Text("THE VISIT BOARD").font(.system(size:22,weight:.black,design:.serif)).tracking(3).foregroundStyle(paper)
-                Text("Every article you opened. Every thread it shares.")
-                    .font(.caption).foregroundStyle(paper.opacity(0.58))
+        VStack(spacing:13) {
+            HStack(spacing:18) {
+                VStack(alignment:.leading,spacing:4) {
+                    Text(theme.heading)
+                        .font(.system(size:22,weight:.black,design:theme == .evidence ? .serif:.monospaced))
+                        .tracking(theme == .evidence ? 3:1.5).foregroundStyle(paper)
+                    Text(theme.caption)
+                        .font(.caption).foregroundStyle(palette.muted)
+                }
+                Spacer()
+                Text("\(articles.count) FILES  /  \(connections.count) THREADS")
+                    .font(.system(size:10,weight:.bold,design:.monospaced)).tracking(2).foregroundStyle(thread)
+                Button("Done") {dismiss()}.buttonStyle(.borderedProminent).tint(ember)
             }
-            Spacer()
-            Text("\(articles.count) FILES  /  \(connections.count) THREADS")
-                .font(.system(size:10,weight:.bold,design:.monospaced)).tracking(2).foregroundStyle(thread)
-            Picker("Package",selection:$packageFilter) {
-                Text("All packages").tag("all")
-                ForEach(packages,id:\.0) {id,name in Text(name).tag(id)}
-            }.frame(width:180)
-            TextField("Find a page",text:$search).textFieldStyle(.roundedBorder).frame(width:155)
-            Toggle("Shared links",isOn:$showShared).toggleStyle(.checkbox).font(.caption)
-            Button("Done") {dismiss()}.buttonStyle(.borderedProminent).tint(ember)
-        }.padding(.horizontal,23).padding(.vertical,17)
-            .background(Color(red:0.13,green:0.105,blue:0.09))
+            HStack(spacing:14) {
+                Picker("Package",selection:$packageFilter) {
+                    Text("All packages").tag("all")
+                    ForEach(packages,id:\.0) {id,name in Text(name).tag(id)}
+                }.frame(width:210)
+                TextField("Find a page",text:$search).textFieldStyle(.roundedBorder).frame(width:180)
+                Toggle("Shared links",isOn:$showShared).toggleStyle(.checkbox).font(.caption)
+                Spacer()
+                Picker("Board theme",selection:$themeName) {
+                    ForEach(VisitBoardTheme.allCases) {choice in Text(choice.name).tag(choice.rawValue)}
+                }.pickerStyle(.menu).frame(width:230)
+            }
+        }.padding(.horizontal,23).padding(.vertical,16)
+            .background(palette.header)
+            .overlay(alignment:.bottom) {Rectangle().fill(palette.edge).frame(height:1)}
     }
     private var boardBackground:some View {
         GeometryReader {geometry in
             ZStack {
-                LinearGradient(colors:[Color(red:0.22,green:0.18,blue:0.14),Color(red:0.11,green:0.105,blue:0.11)],startPoint:.topLeading,endPoint:.bottomTrailing)
+                LinearGradient(colors:[palette.boardTop,palette.boardBottom],startPoint:.topLeading,endPoint:.bottomTrailing)
                 Canvas {context,size in
-                    for x in stride(from:12.0,through:size.width,by:26) {
-                        for y in stride(from:11.0,through:size.height,by:26) {
-                            context.fill(Path(ellipseIn:CGRect(x:x,y:y,width:1.1,height:1.1)),with:.color(.white.opacity(0.055)))
+                    switch theme {
+                    case .evidence:
+                        for x in stride(from:12.0,through:size.width,by:26) {
+                            for y in stride(from:11.0,through:size.height,by:26) {
+                                context.fill(Path(ellipseIn:CGRect(x:x,y:y,width:1.1,height:1.1)),with:.color(.white.opacity(0.055)))
+                            }
+                        }
+                    case .monochrome:break
+                    case .grafana,.blueprint:
+                        let step:CGFloat=theme == .grafana ? 44:28
+                        for x in stride(from:CGFloat.zero,through:size.width,by:step) {
+                            var line=Path();line.move(to:CGPoint(x:x,y:0));line.addLine(to:CGPoint(x:x,y:size.height))
+                            context.stroke(line,with:.color(palette.edge.opacity(theme == .grafana ? 0.22:0.31)),lineWidth:0.65)
+                        }
+                        for y in stride(from:CGFloat.zero,through:size.height,by:step) {
+                            var line=Path();line.move(to:CGPoint(x:0,y:y));line.addLine(to:CGPoint(x:size.width,y:y))
+                            context.stroke(line,with:.color(palette.edge.opacity(theme == .grafana ? 0.22:0.31)),lineWidth:0.65)
                         }
                     }
                 }
-                Rectangle().strokeBorder(paper.opacity(0.11),lineWidth:7).padding(8)
+                Rectangle().strokeBorder(palette.edge.opacity(theme == .monochrome ? 0.5:0.35),lineWidth:theme == .evidence ? 7:1).padding(8)
             }.frame(width:geometry.size.width,height:geometry.size.height)
         }.ignoresSafeArea()
     }
@@ -284,19 +398,26 @@ private struct VisitedMapView:View {
         return Button {selectedID=article.id} label: {
             VStack(alignment:.leading,spacing:7) {
                 HStack {
-                    Circle().fill(ember).frame(width:12,height:12)
-                        .overlay(Circle().stroke(.white.opacity(0.65),lineWidth:1))
-                        .shadow(color:ember.opacity(0.7),radius:6)
+                    Circle().fill(ember).frame(width:theme == .monochrome ? 7:12,height:theme == .monochrome ? 7:12)
+                        .overlay(Circle().stroke(palette.card.opacity(0.75),lineWidth:theme == .evidence ? 1:0))
+                        .shadow(color:ember.opacity(theme == .monochrome ? 0:0.65),radius:6)
                     Spacer()
-                    Text("#\(article.visitCount)").font(.system(size:9,design:.monospaced)).foregroundStyle(.black.opacity(0.55))
+                    Text("#\(article.visitCount)").font(.system(size:9,design:.monospaced)).foregroundStyle(palette.cardMeta)
                 }
-                Text(article.title).font(.system(size:15,weight:.bold,design:.serif)).foregroundStyle(Color(red:0.19,green:0.15,blue:0.13)).lineLimit(2)
-                Text(article.packageName.uppercased()).font(.system(size:8,weight:.bold,design:.monospaced)).tracking(1).foregroundStyle(.black.opacity(0.48)).lineLimit(1)
+                Text(article.title).font(.system(size:15,weight:theme == .monochrome ? .medium:.bold,
+                                                 design:theme == .evidence ? .serif:theme == .monochrome ? .default:.monospaced))
+                    .foregroundStyle(palette.cardText).lineLimit(2)
+                Text(article.packageName.uppercased()).font(.system(size:8,weight:.bold,design:.monospaced))
+                    .tracking(1).foregroundStyle(palette.cardMeta).lineLimit(1)
             }.padding(12).frame(width:170,height:102)
-                .background(paper,in:RoundedRectangle(cornerRadius:3))
-                .overlay(RoundedRectangle(cornerRadius:3).stroke(focused ? ember:.black.opacity(0.24),lineWidth:focused ? 2:1))
-                .shadow(color:.black.opacity(0.65),radius:focused ? 18:9,x:3,y:6)
-                .rotationEffect(.degrees(Double(abs(article.path.hashValue)%7)-3))
+                .background(palette.card,in:RoundedRectangle(cornerRadius:theme == .grafana ? 7:theme == .monochrome ? 1:3))
+                .overlay(RoundedRectangle(cornerRadius:theme == .grafana ? 7:theme == .monochrome ? 1:3)
+                    .stroke(focused ? ember:palette.edge,lineWidth:focused ? 2:1))
+                .overlay(alignment:.leading) {
+                    if theme == .grafana {Rectangle().fill(ember).frame(width:3).padding(.vertical,8)}
+                }
+                .shadow(color:theme == .monochrome ? .clear:.black.opacity(0.6),radius:focused ? 18:8,x:3,y:5)
+                .rotationEffect(.degrees(theme == .evidence ? Double(abs(article.path.hashValue)%7)-3:0))
                 .opacity(dimmed ? 0.24:1)
         }.buttonStyle(.plain).help("Select \(article.title) · drag to arrange")
     }
@@ -305,17 +426,19 @@ private struct VisitedMapView:View {
             Text("THREAD KEY").font(.system(size:10,weight:.bold,design:.monospaced)).tracking(2)
             HStack {Capsule().fill(ember).frame(width:25,height:2);Text("Direct article link")}
             HStack {Capsule().fill(thread).frame(width:25,height:2);Text("Shared destination")}
-            Text("Drag cards · drag board · pinch to zoom").foregroundStyle(paper.opacity(0.5))
-        }.font(.caption2).foregroundStyle(paper.opacity(0.82)).padding(12)
-            .background(.black.opacity(0.48),in:RoundedRectangle(cornerRadius:8))
+            Text("Drag cards · drag board · pinch to zoom").foregroundStyle(palette.muted)
+        }.font(.caption2).foregroundStyle(paper).padding(12)
+            .background(palette.panel.opacity(theme == .monochrome ? 0.96:0.85),in:RoundedRectangle(cornerRadius:theme == .monochrome ? 2:8))
+            .overlay(RoundedRectangle(cornerRadius:theme == .monochrome ? 2:8).stroke(palette.edge,lineWidth:1))
     }
     private func inspector(_ article:VisitedArticle)->some View {
         let related=connections.filter {$0.fromID == article.id || $0.toID == article.id}
         return VStack(alignment:.leading,spacing:9) {
-            Text("CASE FILE").font(.system(size:10,weight:.bold,design:.monospaced)).tracking(2).foregroundStyle(ember)
-            Text(article.title).font(.system(size:19,weight:.bold,design:.serif)).foregroundStyle(paper).lineLimit(2)
+            Text(theme.detailHeading).font(.system(size:10,weight:.bold,design:.monospaced)).tracking(2).foregroundStyle(ember)
+            Text(article.title).font(.system(size:19,weight:.bold,design:theme == .evidence ? .serif:.monospaced))
+                .foregroundStyle(paper).lineLimit(2)
             Text("Visited \(article.visitCount) time\(article.visitCount == 1 ? "" : "s") · \(related.count) connections")
-                .font(.caption).foregroundStyle(paper.opacity(0.6))
+                .font(.caption).foregroundStyle(palette.muted)
             if let strongest=related.sorted(by:{$0.sharedPaths.count>$1.sharedPaths.count}).first {
                 let otherID=strongest.fromID == article.id ? strongest.toID:strongest.fromID
                 let other=articles.first(where:{$0.id == otherID})?.title ?? "another article"
@@ -325,7 +448,7 @@ private struct VisitedMapView:View {
                     Text("Common trail: "+strongest.sharedPaths.prefix(3).map {
                         String($0.split(separator:"/").last ?? "").replacingOccurrences(of:"_",with:" ")
                     }.joined(separator:", "))
-                        .font(.caption2).foregroundStyle(paper.opacity(0.58)).lineLimit(2)
+                        .font(.caption2).foregroundStyle(palette.muted).lineLimit(2)
                 }
             }
             ForEach(Array(related.prefix(4))) {edge in
@@ -337,23 +460,24 @@ private struct VisitedMapView:View {
                             Text(other.title).lineLimit(1)
                             Spacer(minLength:0)
                             Image(systemName:"arrow.up.right").font(.caption2)
-                        }.font(.caption).foregroundStyle(paper.opacity(0.86))
+                        }.font(.caption).foregroundStyle(paper)
                     }.buttonStyle(.plain)
                 }
             }
             Button("Open article ↗") {browser.openVisit(article);dismiss()}
                 .buttonStyle(.borderedProminent).tint(ember)
         }.padding(16).frame(width:265,alignment:.leading)
-            .background(Color(red:0.12,green:0.10,blue:0.095).opacity(0.96),in:RoundedRectangle(cornerRadius:10))
-            .overlay(RoundedRectangle(cornerRadius:10).stroke(thread.opacity(0.27)))
-            .shadow(color:.black.opacity(0.45),radius:18)
+            .background(palette.panel.opacity(0.97),in:RoundedRectangle(cornerRadius:theme == .monochrome ? 2:10))
+            .overlay(RoundedRectangle(cornerRadius:theme == .monochrome ? 2:10).stroke(palette.edge))
+            .shadow(color:theme == .monochrome ? .clear:.black.opacity(0.45),radius:18)
     }
     private var emptyBoard:some View {
         VStack(spacing:12) {
             Image(systemName:"point.3.connected.trianglepath.dotted").font(.system(size:54,weight:.ultraLight)).foregroundStyle(thread)
-            Text("The board is waiting for its first clue.").font(.system(size:25,design:.serif)).foregroundStyle(paper)
+            Text("The board is waiting for its first clue.")
+                .font(.system(size:25,design:theme == .evidence ? .serif:.monospaced)).foregroundStyle(paper)
             Text("Open articles in Browse. Their cards and shared links will appear here, and stay here after relaunch.")
-                .font(.callout).foregroundStyle(paper.opacity(0.6)).multilineTextAlignment(.center).frame(maxWidth:430)
+                .font(.callout).foregroundStyle(palette.muted).multilineTextAlignment(.center).frame(maxWidth:430)
         }
     }
     private func fit(in size:CGSize) {
